@@ -44,6 +44,7 @@ class W(nn.Module):
         output = self.fc(concatenated)  # shape: (B, 3)
         
         return output
+
 class CrossAttentionBlock(nn.Module):
     def __init__(self, dim_q=256, dim_kv=256, num_heads=4):
         super().__init__()
@@ -61,6 +62,8 @@ class CrossAttentionBlock(nn.Module):
         
         out, _ = self.attn(q, k, v)
         return out.squeeze(1)  # (B, 256)
+
+
 class UniEncoder(nn.Module):
     """Per-frame encoder implemented as a small transformer encoder stack.
     Accepts batch-first tensors (B, T, D_in) and outputs (B, T, D_out)
@@ -77,6 +80,8 @@ class UniEncoder(nn.Module):
         x = self.project_in(x)
         x = self.encoder(x)  # (B, T, d_model)
         return x
+    
+
 class FusionModel(nn.Module):
     def __init__(self,
                  device: str = 'cuda',

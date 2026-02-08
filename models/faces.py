@@ -46,7 +46,7 @@ class FacesModel(nn.Module):
         with torch.no_grad(): 
             feat = self.backbone(x)  # (B, 1024)
         
-        # 如果是单样本推理，临时切换到 eval 模式
+        # 如果是单样本推理，临时切换到 eval 模式，测试用！
         if x.size(0) == 1 and self.training:
             self.fc_block.eval()
             output = self.fc_block(feat)
