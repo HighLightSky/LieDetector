@@ -8,8 +8,9 @@ from transformers import Wav2Vec2Processor, Wav2Vec2Model
 class Wav2Vec2Encoder:
     def __init__(self, device=None, model_name='facebook/wav2vec2-base'):
         self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
-        self.processor = Wav2Vec2Processor.from_pretrained("E:\solo\pretrained_models\wav2vec2_base")
-        self.model = Wav2Vec2Model.from_pretrained("E:\solo\pretrained_models\wav2vec2_base").to(self.device)
+        # 自动从 Hugging Face 下载，或使用本地路径
+        self.processor = Wav2Vec2Processor.from_pretrained(model_name)
+        self.model = Wav2Vec2Model.from_pretrained(model_name).to(self.device)
         self.model.eval()
         for p in self.model.parameters():
             p.requires_grad = False  # 默认冻结

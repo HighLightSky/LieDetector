@@ -45,6 +45,14 @@ class FacesModel(nn.Module):
     def forward(self, x: torch.Tensor):
         with torch.no_grad(): 
             feat = self.backbone(x)  # (B, 1024)
+        
+        # 如果是单样本推理，临时切换到 eval 模式
+        if x.size(0) == 1 and self.training:
+            self.fc_block.eval()
+            output = self.fc_block(feat)
+            self.fc_block.train()
+            return output
+        
         return self.fc_block(feat)  # (B, 2)
 
     # ---------- 目录级平均概率（可选） ----------
