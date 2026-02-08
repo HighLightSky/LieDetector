@@ -9,7 +9,6 @@ from typing import Optional, List, Tuple, Dict
 import numpy as np
 
 
-
 class Transpose(nn.Module):
     def __init__(self, dim0, dim1):
         super(Transpose, self).__init__()
