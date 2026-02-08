@@ -1,29 +1,32 @@
 # audio_model.py
 import torch, torch.nn as nn, torch.nn.functional as F
-import torchaudio, librosa
+import librosa
 import numpy as np
-from transformers import Wav2Vec2Processor, Wav2Vec2Model
+# from transformers import Wav2Vec2Processor, Wav2Vec2Model  # 已在 dataloader/audio_extractor.py 中使用
 
 # ---------- 1. 独立 Wav2Vec2 编码器 ----------
-class Wav2Vec2Encoder:
-    def __init__(self, device=None, model_name='facebook/wav2vec2-base'):
-        self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
-        # 自动从 Hugging Face 下载，或使用本地路径
-        self.processor = Wav2Vec2Processor.from_pretrained(model_name)
-        self.model = Wav2Vec2Model.from_pretrained(model_name).to(self.device)
-        self.model.eval()
-        for p in self.model.parameters():
-            p.requires_grad = False  # 默认冻结
-
-    @torch.no_grad()
-    def __call__(self, wav_path):
-        """输入：wav路径；输出：1×768 numpy向量"""
-        wav, sr = torchaudio.load(wav_path)
-        wav = wav.mean(0).numpy()          # 转单通道
-        inputs = self.processor(wav, sampling_rate=16_000, return_tensors='pt', padding=True)
-        inputs = inputs.input_values.to(self.device)
-        hidden = self.model(inputs).last_hidden_state       # [1, T, 768]
-        return hidden.mean(dim=1).squeeze(0).cpu().numpy()  # [768]
+# 注意：此部分已在 dataloader/audio_extractor.py 中实现
+# 请使用 AudioExtractor 类进行音频特征提取
+# 
+# class Wav2Vec2Encoder:
+#     def __init__(self, device=None, model_name='facebook/wav2vec2-base'):
+#         self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
+#         # 自动从 Hugging Face 下载，或使用本地路径
+#         self.processor = Wav2Vec2Processor.from_pretrained(model_name)
+#         self.model = Wav2Vec2Model.from_pretrained(model_name).to(self.device)
+#         self.model.eval()
+#         for p in self.model.parameters():
+#             p.requires_grad = False  # 默认冻结
+#
+#     @torch.no_grad()
+#     def __call__(self, wav_path):
+#         """输入：wav路径；输出：1×768 numpy向量"""
+#         wav, sr = torchaudio.load(wav_path)
+#         wav = wav.mean(0).numpy()          # 转单通道
+#         inputs = self.processor(wav, sampling_rate=16_000, return_tensors='pt', padding=True)
+#         inputs = inputs.input_values.to(self.device)
+#         hidden = self.model(inputs).last_hidden_state       # [1, T, 768]
+#         return hidden.mean(dim=1).squeeze(0).cpu().numpy()  # [768]
 
 # ---------- 2. 可选 MFCC 工具 ----------
 def mfcc_vector(wav_path, n_mfcc=40, sr=16_000):
