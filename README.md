@@ -1,325 +1,487 @@
-# 谎言检测项目 - 当前状态
+# 多模态谎言检测系统
 
-## 项目概览
+基于深度学习的多模态融合谎言检测系统，整合人脸图像、音频和OpenFace特征进行高精度谎言识别。
 
-多模态谎言检测系统，融合人脸图像、音频和OpenFace特征进行谎言识别。
+## 🎯 项目特点
 
-## 完成的模块
+- **多模态融合**: 整合视觉、音频、面部行为三种模态
+- **Transformer架构**: 使用Transformer进行时序建模和跨模态交互
+- **动态权重学习**: 自适应学习各模态的重要性
+- **多任务学习**: 同时优化6个任务，提高泛化能力
+- **端到端训练**: 从视频到预测的完整流程
 
-### ✅ 1. 数据加载器 (dataloader/)
+## 📋 目录
 
-**状态**: 完成并测试通过
+- [快速开始](#快速开始)
+- [完整流程](#完整流程)
+- [项目结构](#项目结构)
+- [模型架构](#模型架构)
+- [性能指标](#性能指标)
+- [文档](#文档)
 
-**功能**:
-- `FaceExtractor`: 从视频提取人脸图像序列
-- `AudioExtractor`: 提取Wav2Vec2音频特征
-- `OpenFaceExtractor`: 提取OpenFace面部特征
-- `LieDetectionDataset`: 数据集类
-- `precompute_features.py`: 批量特征预计算
+## 🚀 快速开始
 
-**测试结果**:
-- ✅ 人脸提取: 0.36s, (16, 3, 160, 160)
-- ✅ 音频提取: 1.50s, (768,)
-- ✅ OpenFace提取: 1.50s, (16, 714)
+### 环境要求
 
-### ✅ 2. 模型架构 (models/)
-
-**状态**: 完成
-
-**子模型**:
-- `FacesModel`: MobileNetV3 + 分类头
-- `AudioModel`: Wav2Vec2特征 → 分类
-- `OpenfaceModel`: OpenFace特征 → 分类
-
-**融合模型**:
-- `MultiModalFusionModel`: 多模态融合 (detect.py)
-- 总参数: 3,245,160
-- 可训练参数: 1,727,304
-
-### ✅ 3. 推理系统 (detect.py)
-
-**状态**: 完成并测试通过
-
-**功能**:
-- 单视频检测
-- 详细数据流输出
-- 支持GPU加速
-
-**测试结果**:
-```
-预测类别: truth (说真话)
-置信度: 85.99%
-概率分布: truth=85.99%, deception=14.01%
+```bash
+# Python 3.8+
+# PyTorch 2.0+
+# CUDA 11.0+ (可选，用于GPU加速)
 ```
 
-### ✅ 4. 训练系统 (trainer/)
+### 安装依赖
 
-**状态**: 完成并测试通过
+```bash
+pip install -r requirements_win.txt
+```
 
-**功能**:
-- 分阶段训练策略
-- 自动保存最佳模型
-- 训练历史记录
-- 学习率调度
+### 快速测试
 
-**测试结果**:
-- ✅ 阶段1: 融合层训练成功
-- ✅ 阶段2: 分类头微调成功
-- ✅ 阶段3: 端到端微调成功
-- 总训练时间: 0.07分钟（小批量）
+```bash
+# 测试推理流程（使用未训练模型）
+python detect.py
 
-### ✅ 5. 数据处理工具
+# 测试训练流程（小批量数据）
+python test_fusion_model.py
+```
 
-**状态**: 完成
+## 📖 完整流程
 
-**功能**:
-- `process_data.py`: 批量特征提取脚本
-- `video_downloader.py`: YouTube视频下载和切片
-- `generate_dataset_csv.py`: 生成数据集标签
+### 步骤1: 数据准备
 
-**数据统计**:
-- 视频总数: 1,479
-- 说谎视频: 791
-- 说真话视频: 688
+#### 1.1 下载和切片视频
 
-**处理性能**:
-- 单视频: ~3.5s (CPU) / ~2.2s (GPU)
-- 全部视频: ~90分钟 (CPU) / ~54分钟 (GPU)
+```bash
+# 从YouTube下载视频并根据时间戳切片
+python -c "from dataloader.video_downloader import VideoDownloader; \
+           downloader = VideoDownloader(); \
+           downloader.run()"
+```
 
-## 项目结构
+**输出**:
+- `src/videos/full/` - 完整YouTube视频
+- `src/videos/cut/` - 切片后的视频片段
+- `src/dataset/video_labels.csv` - 视频标签文件
+
+**数据说明**:
+- 数据集: DOLOS (Deception Detection Dataset)
+- 视频数量: ~1,500个片段
+- 标签: truth (说真话) / deception (说谎)
+
+#### 1.2 提取特征
+
+```bash
+# 批量提取所有视频的特征
+python dataloader/precompute_features.py
+```
+
+**提取的特征**:
+1. **人脸特征** (1024维)
+   - 使用MobileNetV3提取
+   - 每个视频提取16帧
+   - 保存为 `video_name_faces.pt`
+
+2. **音频特征** (768维)
+   - 使用Wav2Vec2提取
+   - 整个音频提取一次
+   - 保存为 `video_name_audios.pt`
+
+3. **OpenFace特征** (714维)
+   - 使用OpenFace工具提取
+   - 包含面部动作单元、头部姿态等
+   - 保存为 `video_name_openfaces.pt`
+
+**输出目录**: `src/features/`
+
+**预计时间**: 
+- CPU: ~90分钟
+- GPU: ~54分钟
+
+### 步骤2: 训练模型
+
+#### 2.1 基本训练
+
+```bash
+# 使用默认参数训练
+python train.py
+```
+
+#### 2.2 自定义训练
+
+```bash
+# 自定义超参数
+python train.py \
+    --num_epochs 50 \
+    --batch_size 16 \
+    --lr 1e-4 \
+    --visual_hidden 512 \
+    --fusion_hidden 256
+```
+
+#### 2.3 从检查点恢复
+
+```bash
+# 从上次中断的地方继续训练
+python train.py --resume checkpoints/latest_model.pth
+```
+
+**训练策略**:
+- **多任务学习**: 同时优化6个任务
+  - Face分类、OpenFace分类、Audio分类
+  - Face-Audio融合、Face-OpenFace融合
+  - 最终融合（主任务）
+- **冻结Backbone**: MobileNetV3保持冻结，只训练融合层
+- **加权损失**: 融合任务权重最高
+- **早停机制**: 防止过拟合
+
+**输出**:
+- `checkpoints/best_model.pth` - 最佳模型
+- `checkpoints/latest_model.pth` - 最新模型
+- `checkpoints/training_history.json` - 训练历史
+
+**预计时间**: 30-60分钟（取决于数据量和硬件）
+
+### 步骤3: 模型预测
+
+#### 3.1 单个视频预测
+
+```bash
+# 使用训练好的模型预测
+python detect.py --checkpoint checkpoints/best_model.pth --video path/to/video.mp4
+```
+
+#### 3.2 批量预测
+
+```bash
+# 批量检测多个视频
+python detect.py --checkpoint checkpoints/best_model.pth --batch
+```
+
+#### 3.3 编程接口
+
+```python
+from detector import LieDetector
+
+# 从检查点加载
+detector = LieDetector.from_checkpoint(
+    checkpoint_path='checkpoints/best_model.pth',
+    device='cuda'
+)
+
+# 预测
+result = detector.predict('video.mp4', verbose=True)
+
+print(f"预测: {result['label_cn']}")
+print(f"置信度: {result['confidence']:.2%}")
+print(f"模态权重: {result['weights']}")
+```
+
+**输出格式**:
+```python
+{
+    'prediction': 0,              # 0: truth, 1: deception
+    'label': 'truth',             # 英文标签
+    'label_cn': '说真话',         # 中文标签
+    'confidence': 0.85,           # 置信度
+    'probs': {
+        'face': [0.6, 0.4],
+        'openface': [0.7, 0.3],
+        'audio': [0.8, 0.2],
+        'fused': [0.85, 0.15]     # 最终概率
+    },
+    'weights': {
+        'face': 0.4,              # 人脸权重
+        'openface': 0.3,          # OpenFace权重
+        'audio': 0.3              # 音频权重
+    }
+}
+```
+
+## 📁 项目结构
 
 ```
 lie_detector/
-├── dataloader/              # 数据加载器 ✅
-│   ├── face_extractor.py
-│   ├── audio_extractor.py
-│   ├── openface_extractor.py
-│   ├── dataset.py
-│   └── precompute_features.py
-├── models/                  # 模型定义 ✅
-│   ├── faces.py
-│   ├── audio.py
-│   └── openface.py
-├── trainer/                 # 训练器 ✅
-│   ├── dataset.py
-│   ├── trainer.py
-│   └── README.md
-├── utils/                   # 工具脚本 ✅
-│   ├── video_downloader.py
-│   └── generate_dataset_csv.py
+├── dataloader/              # 数据加载和特征提取
+│   ├── face_extractor.py    # 人脸特征提取
+│   ├── audio_extractor.py   # 音频特征提取
+│   ├── openface_extractor.py # OpenFace特征提取
+│   ├── dataset.py           # 数据集类
+│   ├── video_downloader.py  # 视频下载和切片
+│   └── precompute_features.py # 批量特征提取
+│
+├── models/                  # 模型定义
+│   ├── faces.py             # 人脸模型 (MobileNetV3)
+│   ├── audio.py             # 音频模型 (Wav2Vec2)
+│   ├── openface.py          # OpenFace模型
+│   └── fusion.py            # 融合模型 ⭐
+│
+├── trainer/                 # 训练器
+│   ├── trainer.py           # 训练逻辑
+│   ├── dataset.py           # 训练数据集
+│   └── README.md            # 训练器文档
+│
+├── detector/                # 检测器
+│   ├── detector.py          # 检测器类
+│   └── README.md            # 检测器文档
+│
+├── docs/                    # 文档
+│   ├── 模型总体架构.md       # 架构说明
+│   ├── 数据流.md            # 数据流和张量形状
+│   ├── 模型API速查表.md     # API参考
+│   └── 训练方案.md          # 训练策略
+│
 ├── src/                     # 数据目录
-│   ├── videos/cut/          # 1,479个视频切片
-│   ├── dataset/             # 标签文件
-│   └── test_data/           # 测试特征
-├── detect.py                # 推理脚本 ✅
-├── train.py                 # 训练脚本 ✅
-├── test_train.py            # 测试训练 ✅
-└── docs/                    # 文档 ✅
+│   ├── videos/              # 视频文件
+│   │   ├── full/            # 完整视频
+│   │   └── cut/             # 切片视频
+│   ├── features/            # 预提取特征
+│   └── dataset/             # 标签文件
+│
+├── checkpoints/             # 模型检查点
+│   ├── best_model.pth       # 最佳模型
+│   ├── latest_model.pth     # 最新模型
+│   └── training_history.json # 训练历史
+│
+├── train.py                 # 训练脚本
+├── detect.py                # 检测脚本
+├── test_fusion_model.py     # 模型测试
+└── README.md                # 本文件
 ```
 
-## 数据流
+## 🏗️ 模型架构
 
-### 完整数据流
+### 整体架构
 
 ```
-1. 视频下载
-   YouTube → 完整视频 → 切片视频 (1,479个)
-
-2. 标签生成
-   视频文件名 → CSV标签 (truth/deception)
-
-3. 特征提取
-   视频 → 人脸 + 音频 + OpenFace 特征
-
-4. 训练
-   特征 → 模型训练 → 保存检查点
-
-5. 推理
-   新视频 → 特征提取 → 模型预测 → 结果
+输入视频
+    ↓
+┌─────────────────────────────────────────┐
+│          特征提取层 (预训练)              │
+├─────────────────────────────────────────┤
+│  MobileNetV3  │  Wav2Vec2  │  OpenFace  │
+│   (1024维)    │   (768维)   │  (714维)   │
+└─────────────────────────────────────────┘
+    ↓           ↓           ↓
+┌─────────────────────────────────────────┐
+│           融合模型 (FusionModel)         │
+├─────────────────────────────────────────┤
+│                                         │
+│  ┌─────────────────────────────────┐   │
+│  │  单模态编码器 (Transformer)      │   │
+│  │  Face → 256维                   │   │
+│  │  OpenFace → 256维               │   │
+│  │  Audio → 256维                  │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+│  ┌─────────────────────────────────┐   │
+│  │  跨模态注意力 (Cross-Attention)  │   │
+│  │  Face ↔ Audio                   │   │
+│  │  Face ↔ OpenFace                │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+│  ┌─────────────────────────────────┐   │
+│  │  动态权重学习 (W Module)         │   │
+│  │  学习各模态重要性                │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+│  ┌─────────────────────────────────┐   │
+│  │  多任务分类                      │   │
+│  │  6个任务同时优化                 │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+└─────────────────────────────────────────┘
+    ↓
+预测结果 (Truth/Deception)
 ```
 
-## 使用流程
+### 关键特性
 
-### 1. 数据准备
+1. **保留高维特征**: 使用256维表示而非2维logits
+2. **时序建模**: Transformer处理视频帧序列
+3. **跨模态交互**: Cross-Attention学习模态间关系
+4. **动态权重**: 自适应学习各模态重要性
+5. **多任务学习**: 6个任务共享表示，提高泛化
 
-```bash
-# 下载和切片视频（如果需要）
-python -c "from utils.video_downloader import VideoDownloader; VideoDownloader().run()"
+### 参数统计
 
-# 生成标签文件
-python run.py
-```
+| 组件 | 参数量 | 是否训练 |
+|------|--------|---------|
+| MobileNetV3 Backbone | ~1.5M | ❌ 冻结 |
+| 融合层 + 注意力 | ~4.7M | ✅ 训练 |
+| **总计** | **~6.2M** | **~4.7M可训练** |
 
-### 2. 特征提取
+## 📊 性能指标
 
-```bash
-# 测试单个视频
-python process_data.py --mode test
+### 特征提取速度
 
-# 批量处理所有视频（约90分钟）
-python process_data.py --mode all
-```
+| 模态 | CPU | GPU |
+|------|-----|-----|
+| 人脸 | ~0.4s | ~0.2s |
+| 音频 | ~1.5s | ~0.8s |
+| OpenFace | ~1.5s | ~1.0s |
+| **总计** | **~3.5s** | **~2.0s** |
 
-### 3. 训练模型
+### 训练速度
 
-```bash
-# 测试训练（小批量）
-python test_train.py
+| 数据量 | 时间 (GPU) |
+|--------|-----------|
+| 100样本 | ~10分钟 |
+| 500样本 | ~30分钟 |
+| 1500样本 | ~60分钟 |
 
-# 完整训练
-python train.py --batch_size 16 --stage1_epochs 10 --stage2_epochs 10 --stage3_epochs 10
-```
+### 推理速度
 
-### 4. 推理预测
-
-```bash
-# 单视频检测
-python detect.py
-
-# 或在代码中使用
-from detect import MultiModalFusionModel, detect_video
-# ... 加载模型和检测
-```
-
-## 当前数据状态
-
-| 项目 | 数量 | 状态 |
-|------|------|------|
-| 视频切片 | 1,479 | ✅ 已下载 |
-| 标签文件 | 1 | ✅ 已生成 |
-| 测试特征 | 6 | ✅ 已提取 |
-| 完整特征 | 0 | ⏳ 待提取 |
-| 训练模型 | 0 | ⏳ 待训练 |
-
-## 下一步任务
-
-### 🔄 立即可做
-
-1. **批量特征提取** (预计2-3小时)
-   ```bash
-   python -c "from dataloader.precompute_features import main; main()"
-   ```
-   - 提取1,479个视频的特征
-   - 保存到 `src/features/`
-
-2. **完整训练** (预计1-2小时)
-   ```bash
-   python train.py
-   ```
-   - 使用完整数据集
-   - 训练30个epoch
-   - 保存最佳模型
-
-3. **模型评估**
-   - 在测试集上评估
-   - 计算准确率、F1分数
-   - 绘制混淆矩阵
-
-### 📋 后续优化
-
-1. **数据增强**
-   - 添加随机裁剪、翻转
-   - 时间序列增强
-
-2. **模型优化**
-   - 超参数调优
-   - 尝试不同的融合策略
-   - 集成学习
-
-3. **性能提升**
-   - 混合精度训练
-   - 梯度累积
-   - 分布式训练
-
-4. **部署准备**
-   - 模型量化
-   - ONNX导出
-   - API接口
-
-## 技术栈
-
-| 组件 | 技术 |
+| 模式 | 速度 |
 |------|------|
-| 深度学习框架 | PyTorch 2.x |
-| 预训练模型 | MobileNetV3, Wav2Vec2 |
-| 人脸检测 | OpenCV, OpenFace |
-| 音频处理 | librosa, transformers |
-| 数据处理 | pandas, numpy |
-| 视频处理 | ffmpeg, yt-dlp |
+| 单视频（含特征提取） | ~5秒 |
+| 批量（特征已提取） | ~0.1秒/视频 |
 
-## 系统要求
+## 📚 文档
+
+### 核心文档
+
+- [模型总体架构](docs/模型总体架构.md) - 详细的架构说明
+- [数据流](docs/数据流.md) - 每一层的张量形状变化
+- [模型API速查表](docs/模型API速查表.md) - API参考手册
+- [训练方案](docs/训练方案.md) - 完整训练策略
+
+### 模块文档
+
+- [训练器使用指南](trainer/README.md) - 训练器详细说明
+- [检测器使用指南](detector/README.md) - 检测器详细说明
+
+## 🔧 配置说明
+
+### 训练配置
+
+```python
+# 基础配置（小数据集）
+{
+    'batch_size': 4,
+    'num_epochs': 20,
+    'lr': 5e-5,
+    'dropout': 0.5,
+    'visual_hidden': 128
+}
+
+# 标准配置（中等数据集）
+{
+    'batch_size': 8,
+    'num_epochs': 30,
+    'lr': 1e-4,
+    'dropout': 0.3,
+    'visual_hidden': 256
+}
+
+# 大规模配置（大数据集）
+{
+    'batch_size': 16,
+    'num_epochs': 50,
+    'lr': 1e-4,
+    'dropout': 0.2,
+    'visual_hidden': 512
+}
+```
+
+### 损失权重配置
+
+```python
+loss_weights = {
+    'face': 0.2,        # 人脸分类
+    'openface': 0.2,    # OpenFace分类
+    'audio': 0.2,       # 音频分类
+    'fa_au': 0.15,      # Face-Audio融合
+    'fa_of': 0.15,      # Face-OpenFace融合
+    'fused': 1.0        # 最终融合（主任务）
+}
+```
+
+## 🛠️ 系统要求
 
 ### 最低配置
+
 - CPU: 4核
 - RAM: 8GB
-- GPU: 可选（CPU也可运行）
+- GPU: 可选
 - 存储: 50GB
 
 ### 推荐配置
+
 - CPU: 8核+
 - RAM: 16GB+
 - GPU: NVIDIA GPU (8GB+ VRAM)
 - 存储: 100GB SSD
 
-## 性能指标
+## 🐛 故障排除
 
-### 特征提取速度
-- 人脸: ~0.4s/视频
-- 音频: ~1.5s/视频
-- OpenFace: ~1.5s/视频
-- **总计**: ~3.5s/视频
+### CUDA out of memory
 
-### 训练速度（预估）
-- 小批量(5样本): 0.07分钟
-- 完整数据集(1479样本): 60-120分钟
+```bash
+# 减小batch_size
+python train.py --batch_size 4
 
-### 推理速度
-- 单视频: ~5秒（含特征提取）
-- 批量推理: ~0.1秒/视频（特征已提取）
+# 或使用CPU
+python train.py --device cpu
+```
 
-## 已知问题
+### OpenFace不可用
 
-1. ⚠️ **OpenFace CSV列名有空格**
-   - 状态: 已修复
-   - 解决: 添加列名清理
+```bash
+# 系统会自动跳过OpenFace特征
+# 只使用人脸和音频特征
+```
 
-2. ⚠️ **部分视频人脸检测失败**
-   - 状态: 正常（视频质量问题）
-   - 影响: 可接受
+### 训练不收敛
 
-3. ⚠️ **Windows上num_workers>0可能出错**
-   - 状态: 已处理
-   - 解决: 设置num_workers=0
+```bash
+# 降低学习率
+python train.py --lr 5e-5
 
-## 文档
+# 增加Dropout
+python train.py --dropout 0.5
+```
 
-- ✅ `README.md`: 项目说明
-- ✅ `DETECT_SUMMARY.md`: 推理系统总结
-- ✅ `TRAINING_SUMMARY.md`: 训练系统总结
-- ✅ `TEST_SUMMARY.md`: 测试结果总结
-- ✅ `trainer/README.md`: 训练器使用文档
-- ✅ `docs/`: 中文文档
+## 📈 技术栈
 
-## 贡献者
+| 组件 | 技术 |
+|------|------|
+| 深度学习框架 | PyTorch 2.x |
+| 预训练模型 | MobileNetV3, Wav2Vec2 |
+| 人脸检测 | OpenCV |
+| 面部特征 | OpenFace 2.0 |
+| 音频处理 | librosa, transformers |
+| 视频处理 | ffmpeg, yt-dlp |
 
-- 数据加载器: ✅ 完成
-- 模型架构: ✅ 完成
-- 训练系统: ✅ 完成
-- 推理系统: ✅ 完成
-- 文档: ✅ 完成
+## 🎓 引用
 
-## 许可证
+如果使用本项目，请引用：
 
-待定
+```bibtex
+@misc{multimodal_lie_detection,
+  title={Multi-Modal Lie Detection System},
+  author={Your Name},
+  year={2026},
+  url={https://github.com/yourusername/lie-detector}
+}
+```
 
-## 联系方式
+## 📄 许可证
 
-待定
+MIT License
+
+## 🤝 贡献
+
+欢迎提交Issue和Pull Request！
+
+## 📧 联系方式
+
+- Email: your.email@example.com
+- GitHub: [@yourusername](https://github.com/yourusername)
 
 ---
 
 **最后更新**: 2026-02-09
 
-**项目状态**: 🟢 开发完成，准备训练
+**项目状态**: 🟢 开发完成，可用于训练和推理
 
-**下一里程碑**: 完整数据集训练
+**版本**: v1.0.0

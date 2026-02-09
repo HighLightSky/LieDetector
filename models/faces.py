@@ -42,9 +42,23 @@ class FacesModel(nn.Module):
         ])
 
     # ---------- 推理/特征 ----------
-    def forward(self, x: torch.Tensor):
+    def forward(self, x: torch.Tensor, return_features=False):
+        """前向传播
+        
+        Args:
+            x: 输入图像张量 (B, C, H, W)
+            return_features: 是否返回中间特征而不是logits
+        
+        Returns:
+            如果 return_features=True: (B, 1024) 特征
+            如果 return_features=False: (B, 2) logits
+        """
         with torch.no_grad(): 
             feat = self.backbone(x)  # (B, 1024)
+        
+        # 如果只需要特征，直接返回
+        if return_features:
+            return feat
         
         # 如果是单样本推理，临时切换到 eval 模式，测试用！
         if x.size(0) == 1 and self.training:
@@ -54,6 +68,17 @@ class FacesModel(nn.Module):
             return output
         
         return self.fc_block(feat)  # (B, 2)
+    
+    def get_features(self, x: torch.Tensor):
+        """提取1024维特征（便捷方法）
+        
+        Args:
+            x: 输入图像张量 (B, C, H, W)
+        
+        Returns:
+            特征张量 (B, 1024)
+        """
+        return self.forward(x, return_features=True)
 
     # ---------- 目录级平均概率（可选） ----------
     def predict_dir(self, face_dir: str):

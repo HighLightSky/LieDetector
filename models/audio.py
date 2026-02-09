@@ -65,13 +65,33 @@ class AudioModel(nn.Module):
             nn.Linear(128, 2)
         )
 
-    def forward(self, audio_features):
+    def forward(self, audio_features, return_features=False):
+        """前向传播
+        
+        Args:
+            audio_features: torch.Tensor (B, 768) - Wav2Vec2特征
+            return_features: 是否返回中间特征而不是logits
+        
+        Returns:
+            如果 return_features=True: (B, 768) 特征（直接返回输入）
+            如果 return_features=False: (B, 2) logits
         """
-        audio_features: torch.Tensor (B, 768)
-        return: logits [B, 2]
+        # 如果只需要特征，直接返回输入（因为输入已经是Wav2Vec2特征）
+        if return_features:
+            return audio_features
+        
+        return self.fc(audio_features)  # [B, 2]
+    
+    def get_features(self, audio_features):
+        """提取768维特征（便捷方法）
+        
+        Args:
+            audio_features: torch.Tensor (B, 768)
+        
+        Returns:
+            特征张量 (B, 768)
         """
-
-        return self.fc(audio_features)        # [B, 2]
+        return self.forward(audio_features, return_features=True)
 
 # ---------- 4. 训练/推理示例 ----------
 if __name__ == '__main__':

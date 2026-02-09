@@ -1,6 +1,6 @@
 """
 多模态谎言检测训练器
-采用分阶段训练策略
+基于FusionModel的训练策略
 """
 
 import torch
@@ -12,25 +12,26 @@ from typing import Dict, Optional
 import json
 from tqdm import tqdm
 
-from detect import MultiModalFusionModel
+from models.fusion import FusionModel
 
 
-class MultiModalTrainer:
-    """多模态融合模型训练器
+class FusionModelTrainer:
+    """融合模型训练器
     
-    分阶段训练策略:
-    1. 阶段1: 只训练融合层，冻结所有子模型
-    2. 阶段2: 解冻并微调所有子模型的分类头
-    3. 阶段3: 端到端微调整个模型
+    训练策略：
+    1. 冻结预训练backbone（MobileNetV3）
+    2. 训练融合层、注意力模块、分类头
+    3. 支持多任务学习（各模态+融合）
     """
     
     def __init__(
         self,
-        model: MultiModalFusionModel,
+        model: FusionModel,
         train_loader: DataLoader,
         val_loader: DataLoader,
         device: str = 'cuda',
-        save_dir: str = 'checkpoints'
+        save_dir: str = 'checkpoints',
+        loss_weights: Optional[Dict[str, float]] = None
     ):
         self.model = model.to(device)
         self.train_loader = train_loader
@@ -39,61 +40,68 @@ class MultiModalTrainer:
         self.save_dir = Path(save_dir)
         self.save_dir.mkdir(parents=True, exist_ok=True)
         
+        # 损失权重（多任务学习）
+        if loss_weights is None:
+            loss_weights = {
+                'face': 0.2,
+                'openface': 0.2,
+                'audio': 0.2,
+                'fa_au': 0.15,
+                'fa_of': 0.15,
+                'fused': 1.0  # 融合损失权重最高
+            }
+        self.loss_weights = loss_weights
+        
         # 训练历史
         self.history = {
             'train_loss': [],
             'train_acc': [],
             'val_loss': [],
             'val_acc': [],
-            'stage': []
+            'train_loss_detail': [],  # 详细损失
+            'val_loss_detail': []
         }
         
         # 最佳模型
         self.best_val_acc = 0.0
         self.best_epoch = 0
     
-    def _freeze_all_submodels(self):
-        """冻结所有子模型"""
-        print("  冻结所有子模型...")
-        for param in self.model.face_model.parameters():
-            param.requires_grad = False
-        for param in self.model.audio_model.parameters():
-            param.requires_grad = False
-        if self.model.openface_model is not None:
-            for param in self.model.openface_model.parameters():
-                param.requires_grad = False
-    
-    def _unfreeze_classification_heads(self):
-        """解冻子模型的分类头"""
-        print("  解冻子模型分类头...")
-        # FacesModel 的 fc_block
-        for param in self.model.face_model.fc_block.parameters():
-            param.requires_grad = True
-        # AudioModel 的 fc
-        for param in self.model.audio_model.fc.parameters():
-            param.requires_grad = True
-        # OpenfaceModel 的 fc
-        if self.model.openface_model is not None:
-            for param in self.model.openface_model.fc.parameters():
-                param.requires_grad = True
-    
-    def _unfreeze_all(self):
-        """解冻所有参数（除了预训练骨干）"""
-        print("  解冻所有可训练参数...")
-        for param in self.model.parameters():
-            param.requires_grad = True
-        # 保持 FacesModel 的骨干冻结
-        for param in self.model.face_model.backbone.parameters():
-            param.requires_grad = False
-    
-    def _get_trainable_params(self):
-        """获取可训练参数"""
-        return [p for p in self.model.parameters() if p.requires_grad]
+    def compute_loss(
+        self,
+        output: Dict,
+        labels: torch.Tensor,
+        return_details: bool = False
+    ) -> torch.Tensor:
+        """计算多任务损失
+        
+        Args:
+            output: 模型输出字典
+            labels: 真实标签 (B,)
+            return_details: 是否返回详细损失
+        
+        Returns:
+            总损失（如果return_details=True，返回(总损失, 详细损失字典)）
+        """
+        criterion = nn.CrossEntropyLoss()
+        
+        losses = {}
+        total_loss = 0.0
+        
+        # 各模态损失
+        for key in ['face', 'openface', 'audio', 'fa_au', 'fa_of', 'fused']:
+            if key in output['logits']:
+                logits = output['logits'][key]
+                loss = criterion(logits, labels)
+                losses[key] = loss.item()
+                total_loss += self.loss_weights[key] * loss
+        
+        if return_details:
+            return total_loss, losses
+        return total_loss
     
     def train_epoch(
         self,
         optimizer: torch.optim.Optimizer,
-        criterion: nn.Module,
         verbose: bool = True
     ) -> Dict[str, float]:
         """训练一个 epoch"""
@@ -102,6 +110,9 @@ class MultiModalTrainer:
         total_loss = 0.0
         correct = 0
         total = 0
+        
+        # 详细损失统计
+        loss_details = {key: 0.0 for key in self.loss_weights.keys()}
         
         pbar = tqdm(self.train_loader, desc='训练', disable=not verbose)
         
@@ -114,18 +125,28 @@ class MultiModalTrainer:
             
             # 前向传播
             optimizer.zero_grad()
-            logits = self.model(faces, audios, openfaces, verbose=False)  # (B, 2)
-            loss = criterion(logits, labels)
+            output = self.model(faces, openfaces, audios)
+            
+            # 计算损失
+            loss, losses = self.compute_loss(output, labels, return_details=True)
             
             # 反向传播
             loss.backward()
             optimizer.step()
             
             # 统计
-            total_loss += loss.item() * faces.size(0)
-            _, predicted = torch.max(logits, 1)
+            batch_size = faces.size(0)
+            total_loss += loss.item() * batch_size
+            
+            # 使用融合概率计算准确率
+            fused_probs = output['probs']['fused']
+            _, predicted = torch.max(fused_probs, 1)
             correct += (predicted == labels).sum().item()
             total += labels.size(0)
+            
+            # 累计详细损失
+            for key, val in losses.items():
+                loss_details[key] += val * batch_size
             
             # 更新进度条
             pbar.set_postfix({
@@ -136,11 +157,18 @@ class MultiModalTrainer:
         avg_loss = total_loss / total
         accuracy = 100.0 * correct / total
         
-        return {'loss': avg_loss, 'accuracy': accuracy}
+        # 平均详细损失
+        for key in loss_details:
+            loss_details[key] /= total
+        
+        return {
+            'loss': avg_loss,
+            'accuracy': accuracy,
+            'loss_detail': loss_details
+        }
     
     def validate(
         self,
-        criterion: nn.Module,
         verbose: bool = True
     ) -> Dict[str, float]:
         """验证"""
@@ -149,6 +177,9 @@ class MultiModalTrainer:
         total_loss = 0.0
         correct = 0
         total = 0
+        
+        # 详细损失统计
+        loss_details = {key: 0.0 for key in self.loss_weights.keys()}
         
         pbar = tqdm(self.val_loader, desc='验证', disable=not verbose)
         
@@ -161,14 +192,24 @@ class MultiModalTrainer:
                 labels = batch['labels'].to(self.device)
                 
                 # 前向传播
-                logits = self.model(faces, audios, openfaces, verbose=False)
-                loss = criterion(logits, labels)
+                output = self.model(faces, openfaces, audios)
+                
+                # 计算损失
+                loss, losses = self.compute_loss(output, labels, return_details=True)
                 
                 # 统计
-                total_loss += loss.item() * faces.size(0)
-                _, predicted = torch.max(logits, 1)
+                batch_size = faces.size(0)
+                total_loss += loss.item() * batch_size
+                
+                # 使用融合概率计算准确率
+                fused_probs = output['probs']['fused']
+                _, predicted = torch.max(fused_probs, 1)
                 correct += (predicted == labels).sum().item()
                 total += labels.size(0)
+                
+                # 累计详细损失
+                for key, val in losses.items():
+                    loss_details[key] += val * batch_size
                 
                 # 更新进度条
                 pbar.set_postfix({
@@ -179,84 +220,94 @@ class MultiModalTrainer:
         avg_loss = total_loss / total
         accuracy = 100.0 * correct / total
         
-        return {'loss': avg_loss, 'accuracy': accuracy}
+        # 平均详细损失
+        for key in loss_details:
+            loss_details[key] /= total
+        
+        return {
+            'loss': avg_loss,
+            'accuracy': accuracy,
+            'loss_detail': loss_details
+        }
     
-    def train_stage(
+    def train(
         self,
-        stage: int,
-        num_epochs: int,
-        lr: float,
+        num_epochs: int = 30,
+        lr: float = 1e-4,
         weight_decay: float = 1e-4,
+        patience: int = 5,
         verbose: bool = True
     ):
-        """训练一个阶段
+        """训练模型
         
         Args:
-            stage: 阶段编号 (1, 2, 3)
             num_epochs: 训练轮数
             lr: 学习率
             weight_decay: 权重衰减
+            patience: 早停耐心值
             verbose: 是否显示详细信息
         """
         print(f"\n{'='*60}")
-        print(f"阶段 {stage} 训练")
+        print(f"开始训练融合模型")
         print(f"{'='*60}")
         
-        # 设置训练策略
-        if stage == 1:
-            print("策略: 只训练融合层")
-            self._freeze_all_submodels()
-            # 融合层始终可训练
-        elif stage == 2:
-            print("策略: 微调子模型分类头 + 融合层")
-            self._unfreeze_classification_heads()
-        elif stage == 3:
-            print("策略: 端到端微调")
-            self._unfreeze_all()
-        else:
-            raise ValueError(f"不支持的阶段: {stage}")
-        
-        # 优化器和损失函数
-        trainable_params = self._get_trainable_params()
+        # 统计可训练参数
+        trainable_params = [p for p in self.model.parameters() if p.requires_grad]
         print(f"可训练参数: {sum(p.numel() for p in trainable_params):,}")
         
+        # 优化器
         optimizer = torch.optim.AdamW(
             trainable_params,
             lr=lr,
             weight_decay=weight_decay
         )
         
-        criterion = nn.CrossEntropyLoss()
-        
         # 学习率调度器
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
             mode='max',
             factor=0.5,
-            patience=3
+            patience=patience,
+            verbose=True
         )
         
         # 训练循环
         print(f"\n开始训练 {num_epochs} 个 epoch...")
+        start_time = time.time()
+        
+        no_improve_count = 0
         
         for epoch in range(num_epochs):
             print(f"\nEpoch {epoch + 1}/{num_epochs}")
             print("-" * 60)
             
             # 训练
-            train_metrics = self.train_epoch(optimizer, criterion, verbose=verbose)
+            train_metrics = self.train_epoch(optimizer, verbose=verbose)
             print(f"训练 - Loss: {train_metrics['loss']:.4f}, Acc: {train_metrics['accuracy']:.2f}%")
             
+            # 打印详细损失
+            if verbose:
+                print("  详细损失:")
+                for key, val in train_metrics['loss_detail'].items():
+                    print(f"    {key}: {val:.4f}")
+            
             # 验证
-            val_metrics = self.validate(criterion, verbose=verbose)
+            val_metrics = self.validate(verbose=verbose)
             print(f"验证 - Loss: {val_metrics['loss']:.4f}, Acc: {val_metrics['accuracy']:.2f}%")
+            
+            # 打印详细损失
+            if verbose:
+                print("  详细损失:")
+                for key, val in val_metrics['loss_detail'].items():
+                    print(f"    {key}: {val:.4f}")
             
             # 记录历史
             self.history['train_loss'].append(train_metrics['loss'])
             self.history['train_acc'].append(train_metrics['accuracy'])
             self.history['val_loss'].append(val_metrics['loss'])
             self.history['val_acc'].append(val_metrics['accuracy'])
-            self.history['stage'].append(stage)
+            self.history['train_loss_detail'].append(train_metrics['loss_detail'])
+            self.history['val_loss_detail'].append(val_metrics['loss_detail'])
             
             # 学习率调度
             scheduler.step(val_metrics['accuracy'])
@@ -265,46 +316,19 @@ class MultiModalTrainer:
             if val_metrics['accuracy'] > self.best_val_acc:
                 self.best_val_acc = val_metrics['accuracy']
                 self.best_epoch = epoch + 1
-                self.save_checkpoint(f'best_stage{stage}.pth', stage, epoch + 1)
+                self.save_checkpoint('best_model.pth', epoch + 1)
                 print(f"✓ 保存最佳模型 (验证准确率: {self.best_val_acc:.2f}%)")
+                no_improve_count = 0
+            else:
+                no_improve_count += 1
             
             # 保存最新模型
-            self.save_checkpoint(f'latest_stage{stage}.pth', stage, epoch + 1)
-        
-        print(f"\n阶段 {stage} 训练完成!")
-        print(f"最佳验证准确率: {self.best_val_acc:.2f}% (Epoch {self.best_epoch})")
-    
-    def train_all_stages(
-        self,
-        stage1_epochs: int = 10,
-        stage2_epochs: int = 10,
-        stage3_epochs: int = 10,
-        stage1_lr: float = 1e-3,
-        stage2_lr: float = 5e-4,
-        stage3_lr: float = 1e-4,
-        verbose: bool = True
-    ):
-        """训练所有阶段
-        
-        Args:
-            stage1_epochs: 阶段1训练轮数
-            stage2_epochs: 阶段2训练轮数
-            stage3_epochs: 阶段3训练轮数
-            stage1_lr: 阶段1学习率
-            stage2_lr: 阶段2学习率
-            stage3_lr: 阶段3学习率
-            verbose: 是否显示详细信息
-        """
-        start_time = time.time()
-        
-        # 阶段1: 训练融合层
-        self.train_stage(1, stage1_epochs, stage1_lr, verbose=verbose)
-        
-        # 阶段2: 微调分类头
-        self.train_stage(2, stage2_epochs, stage2_lr, verbose=verbose)
-        
-        # 阶段3: 端到端微调
-        self.train_stage(3, stage3_epochs, stage3_lr, verbose=verbose)
+            self.save_checkpoint('latest_model.pth', epoch + 1)
+            
+            # 早停
+            if no_improve_count >= patience * 2:
+                print(f"\n早停: {patience * 2} 个epoch没有改进")
+                break
         
         # 总结
         elapsed_time = time.time() - start_time
@@ -312,20 +336,20 @@ class MultiModalTrainer:
         print("训练完成!")
         print(f"{'='*60}")
         print(f"总训练时间: {elapsed_time / 60:.2f} 分钟")
-        print(f"最佳验证准确率: {self.best_val_acc:.2f}%")
+        print(f"最佳验证准确率: {self.best_val_acc:.2f}% (Epoch {self.best_epoch})")
         print(f"模型保存在: {self.save_dir}")
         
         # 保存训练历史
         self.save_history()
     
-    def save_checkpoint(self, filename: str, stage: int, epoch: int):
+    def save_checkpoint(self, filename: str, epoch: int):
         """保存检查点"""
         checkpoint = {
             'model_state_dict': self.model.state_dict(),
-            'stage': stage,
             'epoch': epoch,
             'best_val_acc': self.best_val_acc,
-            'history': self.history
+            'history': self.history,
+            'loss_weights': self.loss_weights
         }
         torch.save(checkpoint, self.save_dir / filename)
     
@@ -335,8 +359,10 @@ class MultiModalTrainer:
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.best_val_acc = checkpoint['best_val_acc']
         self.history = checkpoint['history']
+        if 'loss_weights' in checkpoint:
+            self.loss_weights = checkpoint['loss_weights']
         print(f"✓ 加载检查点: {filename}")
-        print(f"  阶段: {checkpoint['stage']}, Epoch: {checkpoint['epoch']}")
+        print(f"  Epoch: {checkpoint['epoch']}")
         print(f"  最佳验证准确率: {self.best_val_acc:.2f}%")
     
     def save_history(self):

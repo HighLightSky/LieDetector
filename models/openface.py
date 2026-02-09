@@ -24,12 +24,30 @@ class OpenfaceModel(nn.Module):
             nn.Linear(256, num_classes)
         )
     
-    def forward(self, x):
-        """
+    def forward(self, x, return_features=False):
+        """前向传播
+        
         Args:
             x: OpenFace 特征张量，shape (B, 714) 或 (B*T, 714)
+            return_features: 是否返回中间特征而不是logits
         
         Returns:
-            logits: 分类 logits，shape (B, num_classes) 或 (B*T, num_classes)
+            如果 return_features=True: (B, 714) 特征（直接返回输入）
+            如果 return_features=False: (B, num_classes) logits
         """
+        # 如果只需要特征，直接返回输入（因为输入已经是OpenFace特征）
+        if return_features:
+            return x
+        
         return self.fc(x)
+    
+    def get_features(self, x):
+        """提取714维特征（便捷方法）
+        
+        Args:
+            x: OpenFace 特征张量，shape (B, 714)
+        
+        Returns:
+            特征张量 (B, 714)
+        """
+        return self.forward(x, return_features=True)
