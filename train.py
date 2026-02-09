@@ -86,10 +86,6 @@ def main():
     """主函数"""
     args = parse_args()
     
-    print("\n" + "="*60)
-    print("多模态谎言检测模型 - 训练")
-    print("="*60)
-    
     # 设置随机种子
     set_seed(args.seed)
     print(f"\n随机种子: {args.seed}")
@@ -281,13 +277,13 @@ def main():
         print(f"\n最佳模型保存在: {Path(args.save_dir) / 'best_model.pth'}")
         print(f"训练历史保存在: {Path(args.save_dir) / 'training_history.json'}")
         
-        print("\n下一步:")
-        print("  1. 使用最佳模型进行推理:")
-        print(f"     python detect.py --checkpoint {args.save_dir}/best_model.pth --video path/to/video.mp4")
-        print("  2. 或使用LieDetector API:")
-        print("     from detector import LieDetector")
-        print(f"     detector = LieDetector.from_checkpoint('{args.save_dir}/best_model.pth')")
-        print("     result = detector.predict('video.mp4')")
+        # print("\n下一步:")
+        # print("  1. 使用最佳模型进行推理:")
+        # print(f"     python detect.py --checkpoint {args.save_dir}/best_model.pth --video path/to/video.mp4")
+        # print("  2. 或使用LieDetector API:")
+        # print("     from detector import LieDetector")
+        # print(f"     detector = LieDetector.from_checkpoint('{args.save_dir}/best_model.pth')")
+        # print("     result = detector.predict('video.mp4')")
         
     except KeyboardInterrupt:
         print("\n\n[WARNING] 训练被用户中断")
