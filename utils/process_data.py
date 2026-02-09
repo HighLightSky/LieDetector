@@ -299,8 +299,8 @@ def process_videos_in_batches(video_dir: Path, output_dir: Path, batch_size: int
     print(f"\n输出目录: {output_dir.absolute()}")
 
 
-def main():
-    """主函数"""
+def preprocess_features():
+    """主函数，提取所有cut视频的三大特征，并保存"""
     video_dir = Path('src/videos/cut')
     output_dir = Path('src/features')
     
@@ -315,5 +315,5 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    preprocess_features()
 
