@@ -68,11 +68,12 @@
 - ✅ 阶段3: 端到端微调成功
 - 总训练时间: 0.07分钟（小批量）
 
-### ✅ 5. 数据处理工具 (utils/)
+### ✅ 5. 数据处理工具
 
 **状态**: 完成
 
 **功能**:
+- `process_data.py`: 批量特征提取脚本
 - `video_downloader.py`: YouTube视频下载和切片
 - `generate_dataset_csv.py`: 生成数据集标签
 
@@ -80,6 +81,10 @@
 - 视频总数: 1,479
 - 说谎视频: 791
 - 说真话视频: 688
+
+**处理性能**:
+- 单视频: ~3.5s (CPU) / ~2.2s (GPU)
+- 全部视频: ~90分钟 (CPU) / ~54分钟 (GPU)
 
 ## 项目结构
 
@@ -148,8 +153,11 @@ python run.py
 ### 2. 特征提取
 
 ```bash
-# 提取所有视频的特征
-python -c "from dataloader.precompute_features import main; main()"
+# 测试单个视频
+python process_data.py --mode test
+
+# 批量处理所有视频（约90分钟）
+python process_data.py --mode all
 ```
 
 ### 3. 训练模型

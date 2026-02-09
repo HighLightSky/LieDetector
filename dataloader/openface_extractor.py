@@ -84,7 +84,8 @@ class OpenFaceExtractor:
         video_path: Union[str, Path],
         return_tensor: bool = True,
         save_csv: bool = True,
-        csv_output_dir: Optional[Union[str, Path]] = None
+        csv_output_dir: Optional[Union[str, Path]] = None,
+        verbose: bool = False
     ) -> Union[torch.Tensor, np.ndarray]:
         """从视频中提取 OpenFace 特征
         
@@ -93,6 +94,7 @@ class OpenFaceExtractor:
             return_tensor: 是否返回 PyTorch tensor
             save_csv: 是否保存 OpenFace 输出的 CSV 文件
             csv_output_dir: CSV 文件保存目录，None 表示保存到 openface_output/
+            verbose: 是否输出详细信息
         
         Returns:
             OpenFace 特征序列
@@ -103,20 +105,23 @@ class OpenFaceExtractor:
         if not video_path.exists():
             raise FileNotFoundError(f"视频文件不存在: {video_path}")
         
-        # 设置 CSV 输出目录
+        # 设置 CSV 输出目录（仅在需要保存时）
         if save_csv:
             if csv_output_dir is None:
                 csv_output_dir = Path('src/test_data')
             else:
                 csv_output_dir = Path(csv_output_dir)
             csv_output_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            csv_output_dir = None
         
         # 创建临时输出目录
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_dir = Path(temp_dir)
             
             # 运行 OpenFace
-            print(f"正在运行 OpenFace: {video_path.name}")
+            if verbose:
+                print(f"正在运行 OpenFace: {video_path.name}")
             try:
                 result = subprocess.run(
                     [
@@ -134,50 +139,60 @@ class OpenFaceExtractor:
                     capture_output=True,
                     timeout=300  # 5分钟超时
                 )
-                print(f"OpenFace 执行成功")
+                if verbose:
+                    print(f"OpenFace 执行成功")
             except subprocess.CalledProcessError as e:
                 error_msg = e.stderr.decode() if e.stderr else "未知错误"
-                print(f"OpenFace 执行失败: {error_msg}")
+                if verbose:
+                    print(f"OpenFace 执行失败: {error_msg}")
                 raise RuntimeError(f"OpenFace 执行失败: {error_msg}")
             except subprocess.TimeoutExpired:
-                print("OpenFace 执行超时")
+                if verbose:
+                    print("OpenFace 执行超时")
                 raise RuntimeError("OpenFace 执行超时")
             
             # 读取输出的 CSV 文件
             csv_files = list(temp_dir.glob('*.csv'))
             if len(csv_files) == 0:
-                print(f"OpenFace 未生成输出文件")
-                print(f"临时目录内容: {list(temp_dir.iterdir())}")
+                if verbose:
+                    print(f"OpenFace 未生成输出文件")
+                    print(f"临时目录内容: {list(temp_dir.iterdir())}")
                 raise RuntimeError("OpenFace 未生成输出文件")
             
             csv_path = csv_files[0]
-            print(f"找到 CSV 文件: {csv_path.name}")
+            if verbose:
+                print(f"找到 CSV 文件: {csv_path.name}")
             
             # 保存 CSV 文件（如果需要）
-            if save_csv:
+            if save_csv and csv_output_dir is not None:
                 saved_csv_path = csv_output_dir / f"{video_path.stem}_openface.csv"
                 shutil.copy(csv_path, saved_csv_path)
-                print(f"✅ CSV 文件已保存到: {saved_csv_path}")
+                if verbose:
+                    print(f"✅ CSV 文件已保存到: {saved_csv_path}")
             
             # 读取 CSV
             df = pd.read_csv(csv_path)
-            print(f"CSV 文件包含 {len(df)} 行, {len(df.columns)} 列")
-            print(f"前 5 列: {list(df.columns[:5])}")
+            if verbose:
+                print(f"CSV 文件包含 {len(df)} 行, {len(df.columns)} 列")
+                print(f"前 5 列: {list(df.columns[:5])}")
             
             # 提取特征
             try:
                 features = self._extract_features_from_df(df)
-                print(f"提取特征形状: {features.shape}")
+                if verbose:
+                    print(f"提取特征形状: {features.shape}")
             except Exception as e:
-                print(f"特征提取失败: {e}")
-                print(f"可用列: {list(df.columns)}")
+                if verbose:
+                    print(f"特征提取失败: {e}")
+                    print(f"可用列: {list(df.columns)}")
                 raise
         
         # 采样帧
         if self.num_frames is not None and len(features) > self.num_frames:
             indices = np.linspace(0, len(features) - 1, self.num_frames, dtype=int)
             features = features[indices]
-            print(f"采样后特征形状: {features.shape}")
+            if verbose:
+                print(f"采样后特征形状: {features.shape}")
         
         if return_tensor:
             features = torch.from_numpy(features).float()

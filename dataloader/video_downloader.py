@@ -186,6 +186,72 @@ class VideoDownloader:
             print(f"    错误: {e}")
             return None
     
+    def validate_video_clip(self, video_path: Path) -> Tuple[bool, str]:
+        """验证视频片段是否有效（包含音频和视频流）
+        
+        Args:
+            video_path: 视频文件路径
+        
+        Returns:
+            (是否有效, 错误信息)
+        """
+        try:
+            # 使用 ffprobe 检查视频流信息
+            result = subprocess.run(
+                [
+                    'ffprobe',
+                    '-v', 'error',
+                    '-show_entries', 'stream=codec_type,duration',
+                    '-of', 'json',
+                    str(video_path)
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            
+            if result.returncode != 0:
+                return False, "无法读取视频信息"
+            
+            # 解析 JSON 输出
+            import json
+            data = json.loads(result.stdout)
+            
+            if 'streams' not in data or not data['streams']:
+                return False, "视频文件无流信息"
+            
+            # 检查是否包含视频流和音频流
+            has_video = False
+            has_audio = False
+            
+            for stream in data['streams']:
+                codec_type = stream.get('codec_type', '')
+                if codec_type == 'video':
+                    has_video = True
+                elif codec_type == 'audio':
+                    has_audio = True
+            
+            if not has_video:
+                return False, "缺少视频流"
+            if not has_audio:
+                return False, "缺少音频流"
+            
+            # 检查文件大小（太小可能是损坏的）
+            file_size = video_path.stat().st_size
+            if file_size < 1024:  # 小于 1KB
+                return False, f"文件过小 ({file_size} bytes)"
+            
+            return True, ""
+        
+        except FileNotFoundError:
+            raise RuntimeError(
+                "未找到 ffprobe。请确保 ffmpeg 已正确安装"
+            )
+        except subprocess.TimeoutExpired:
+            return False, "验证超时"
+        except Exception as e:
+            return False, f"验证出错: {str(e)}"
+    
     def cut_video(
         self,
         input_path: Path,
@@ -206,10 +272,15 @@ class VideoDownloader:
         """
         output_path = self.cut_video_dir / f"{output_name}.mp4"
         
-        # 如果已经切片，跳过
+        # 如果已经切片，验证是否有效
         if output_path.exists():
-            print(f"    ✓ 片段已存在: {output_name}")
-            return True
+            is_valid, error_msg = self.validate_video_clip(output_path)
+            if is_valid:
+                print(f"    ✓ 片段已存在且有效: {output_name}")
+                return True
+            else:
+                print(f"    ⚠️  片段已存在但无效 ({error_msg})，重新切片...")
+                output_path.unlink()  # 删除无效文件
         
         duration = end_time - start_time
         
@@ -221,21 +292,34 @@ class VideoDownloader:
         
         try:
             # 使用 ffmpeg 切片
+            # 注意：使用 -c copy 可能导致音频丢失，改用重新编码确保音视频完整
             result = subprocess.run(
                 [
                     'ffmpeg',
                     '-i', str(input_path),
                     '-ss', str(start_time),
                     '-t', str(duration),
-                    '-c', 'copy',  # 直接复制，不重新编码（更快）
+                    '-c:v', 'libx264',  # 重新编码视频
+                    '-c:a', 'aac',      # 重新编码音频
+                    '-strict', 'experimental',
                     '-y',  # 覆盖输出文件
                     '-loglevel', 'error',  # 只显示错误
                     str(output_path)
                 ],
                 check=True,
                 capture_output=True,
-                timeout=60
+                timeout=120  # 增加超时时间，因为重新编码需要更长时间
             )
+            
+            # 验证切片结果
+            is_valid, error_msg = self.validate_video_clip(output_path)
+            if not is_valid:
+                print(f"✗ (验证失败: {error_msg})")
+                # 删除无效文件
+                if output_path.exists():
+                    output_path.unlink()
+                return False
+            
             print("✓")
             return True
         
@@ -247,9 +331,15 @@ class VideoDownloader:
         except subprocess.CalledProcessError as e:
             print("✗")
             print(f"      错误: {e.stderr.decode()}")
+            # 删除可能生成的不完整文件
+            if output_path.exists():
+                output_path.unlink()
             return False
         except subprocess.TimeoutExpired:
             print("✗ (超时)")
+            # 删除可能生成的不完整文件
+            if output_path.exists():
+                output_path.unlink()
             return False
     
     def download_all_videos(self):

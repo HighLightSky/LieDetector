@@ -2,7 +2,7 @@
 运行入口
 """
 
-from utils import generate_dataset_csv
+from utils import download_videos
 
 if __name__ == '__main__':
-    generate_dataset_csv.generate_dataset()
+    download_videos.download_videos()
