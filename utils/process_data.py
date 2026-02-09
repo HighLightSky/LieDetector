@@ -7,6 +7,8 @@ import torch
 from pathlib import Path
 import time
 import signal
+import gc
+import cv2
 from contextlib import contextmanager
 from dataloader import FaceExtractor, AudioExtractor, OpenFaceExtractor
 
@@ -48,13 +50,40 @@ def timeout(seconds):
             signal.signal(signal.SIGALRM, old_handler)
 
 
-def process_videos_in_batches(video_dir: Path, output_dir: Path, batch_size: int = 50):
+def get_video_duration(video_path: Path) -> float:
+    """获取视频时长（秒）
+    
+    Args:
+        video_path: 视频文件路径
+        
+    Returns:
+        视频时长（秒），如果无法读取返回 -1
+    """
+    try:
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            return -1
+        
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+        cap.release()
+        
+        if fps > 0:
+            duration = frame_count / fps
+            return duration
+        return -1
+    except Exception:
+        return -1
+
+
+def process_videos_in_batches(video_dir: Path, output_dir: Path, batch_size: int = 50, max_duration: float = 30.0):
     """批量处理视频特征提取
     
     Args:
         video_dir: 视频目录 (src/videos/cut/)
         output_dir: 输出目录 (src/features/)
         batch_size: 每批处理的视频数量
+        max_duration: 最大视频时长（秒），超过此时长的视频将被跳过
     """
     
     # 获取所有视频文件
@@ -67,7 +96,8 @@ def process_videos_in_batches(video_dir: Path, output_dir: Path, batch_size: int
     
     print(f"找到 {total_videos} 个视频文件")
     print(f"输出目录: {output_dir}")
-    print(f"批次大小: {batch_size}\n")
+    print(f"批次大小: {batch_size}")
+    print(f"最大时长: {max_duration}秒\n")
     
     # 初始化提取器
     print("初始化提取器...")
@@ -105,7 +135,9 @@ def process_videos_in_batches(video_dir: Path, output_dir: Path, batch_size: int
         'faces_ok': 0,
         'audios_ok': 0,
         'openfaces_ok': 0,
-        'failed': 0
+        'failed': 0,
+        'too_long': 0,
+        'too_long_videos': []  # 记录过长的视频
     }
     
     start_time = time.time()
@@ -138,6 +170,19 @@ def process_videos_in_batches(video_dir: Path, output_dir: Path, batch_size: int
                 print(f"[{global_idx}/{total_videos}] {video_name} - 已跳过")
                 continue
             
+            # 检查视频时长
+            duration = get_video_duration(video_path)
+            if duration > max_duration:
+                stats['too_long'] += 1
+                stats['too_long_videos'].append({
+                    'name': video_name,
+                    'duration': duration
+                })
+                print(f"[{global_idx}/{total_videos}] {video_name} - ⏱ 视频过长 ({duration:.1f}s > {max_duration}s)")
+                continue
+            elif duration < 0:
+                print(f"[{global_idx}/{total_videos}] {video_name} - ⚠ 无法读取时长，尝试处理...")
+            
             # 处理视频（带超时控制）
             video_start = time.time()
             print(f"[{global_idx}/{total_videos}] {video_name}", end=' ', flush=True)
@@ -153,12 +198,13 @@ def process_videos_in_batches(video_dir: Path, output_dir: Path, batch_size: int
                     try:
                         # 检查是否已经超时
                         elapsed = time.time() - video_start
-                        if elapsed > 40:
+                        if elapsed > 30:
                             timeout_error = True
-                            raise TimeoutException("总处理时间超过40秒")
+                            raise TimeoutException("总处理时间超过30秒")
                         
                         faces = face_extractor.extract_from_video(video_path, return_tensor=True)
                         torch.save(faces, face_path)
+                        del faces  # 立即释放内存
                         stats['faces_ok'] += 1
                         any_success = True
                         print("F", end='', flush=True)
@@ -192,9 +238,9 @@ def process_videos_in_batches(video_dir: Path, output_dir: Path, batch_size: int
                     try:
                         # 检查是否已经超时
                         elapsed = time.time() - video_start
-                        if elapsed > 40:
+                        if elapsed > 30:
                             timeout_error = True
-                            raise TimeoutException("总处理时间超过40秒")
+                            raise TimeoutException("总处理时间超过30秒")
                         
                         audios = audio_extractor.extract_from_video(
                             video_path, 
@@ -202,6 +248,7 @@ def process_videos_in_batches(video_dir: Path, output_dir: Path, batch_size: int
                             keep_audio=False
                         )
                         torch.save(audios, audio_path)
+                        del audios  # 立即释放内存
                         stats['audios_ok'] += 1
                         any_success = True
                         print("A", end='', flush=True)
@@ -228,9 +275,9 @@ def process_videos_in_batches(video_dir: Path, output_dir: Path, batch_size: int
                     try:
                         # 检查是否已经超时
                         elapsed = time.time() - video_start
-                        if elapsed > 40:
+                        if elapsed > 30:
                             timeout_error = True
-                            raise TimeoutException("总处理时间超过40秒")
+                            raise TimeoutException("总处理时间超过30秒")
                         
                         openfaces = openface_extractor.extract_from_video(
                             video_path,
@@ -239,6 +286,7 @@ def process_videos_in_batches(video_dir: Path, output_dir: Path, batch_size: int
                             verbose=False
                         )
                         torch.save(openfaces, openface_path)
+                        del openfaces  # 立即释放内存
                         stats['openfaces_ok'] += 1
                         any_success = True
                         print("O", end='', flush=True)
@@ -281,8 +329,14 @@ def process_videos_in_batches(video_dir: Path, output_dir: Path, batch_size: int
         remaining_videos = total_videos - batch_end
         remaining_time = remaining_videos * avg_time / 60 if avg_time > 0 else 0
         
-        print(f"\n已处理: {stats['processed']} | 已跳过: {stats['skipped']} | 失败: {stats['failed']}")
-        print(f"平均: {avg_time:.2f}s/视频 | 预计剩余: {remaining_time:.1f}分钟\n")
+        print(f"\n已处理: {stats['processed']} | 已跳过: {stats['skipped']} | 失败: {stats['failed']} | 过长: {stats['too_long']}")
+        print(f"平均: {avg_time:.2f}s/视频 | 预计剩余: {remaining_time:.1f}分钟")
+        
+        # 批次结束后清理内存
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        print(f"✓ 内存已清理\n")
     
     # 最终统计
     print("=" * 60)
@@ -292,10 +346,20 @@ def process_videos_in_batches(video_dir: Path, output_dir: Path, batch_size: int
     print(f"已处理: {stats['processed']}")
     print(f"已跳过: {stats['skipped']}")
     print(f"失败: {stats['failed']}")
+    print(f"过长未处理: {stats['too_long']}")
     print(f"\n人脸特征: {stats['faces_ok']}")
     print(f"音频特征: {stats['audios_ok']}")
     if use_openface:
         print(f"OpenFace 特征: {stats['openfaces_ok']}")
+    
+    # 输出过长视频列表
+    if stats['too_long_videos']:
+        print(f"\n{'=' * 60}")
+        print(f"视频过长列表 (>{max_duration}秒):")
+        print(f"{'=' * 60}")
+        for video_info in sorted(stats['too_long_videos'], key=lambda x: x['duration'], reverse=True):
+            print(f"  {video_info['name']}: {video_info['duration']:.1f}秒")
+    
     print(f"\n输出目录: {output_dir.absolute()}")
 
 
