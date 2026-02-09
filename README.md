@@ -35,29 +35,93 @@
 pip install -r requirements_win.txt
 ```
 
-### 快速测试
+### 完整流程（三步走）
 
 ```bash
-# 测试推理流程（使用未训练模型）
+# 步骤1: 数据准备（下载视频、切片、提取特征）
+python run_utils.py
+
+# 步骤2: 训练模型
+python train.py --num_epochs 10 --batch_size 8 --lr 1e-5
+
+# 步骤3: 模型预测（随机50个视频，计算准确率）
 python detect.py
-
-# 测试训练流程（已验证可正常运行）
-python train.py --num_epochs 2 --batch_size 8 --visual_hidden 128 --fusion_hidden 64
-
-# 完整训练流程（需要先准备数据）
-# 1. 下载和切片视频
-# 2. 提取特征
-# 3. 训练模型
-# 详见下方"完整流程"部分
 ```
 
-**训练状态**: ✅ 已验证可正常运行（无NaN，损失正常下降）
+### 快速训练
+
+```bash
+# 训练模型（需要先运行 python run_utils.py 准备数据）
+python train.py --num_epochs 10 --batch_size 8 --lr 1e-5
+
+# 训练完成后会生成:
+# - checkpoints/best_model.pth (最佳模型)
+# - checkpoints/latest_model.pth (最新模型)
+# - checkpoints/training_history.json (训练历史)
+```
+
+### 快速推理
+
+```bash
+# 方法1: 默认测试（随机抽取50个视频，计算准确率）
+python detect.py
+
+# 方法2: 单个视频检测
+python detect.py --video path/to/video.mp4
+
+# 方法3: 批量检测（检测目录下所有视频）
+python detect.py --video_dir path/to/videos/
+
+# 方法4: 指定检查点和设备
+python detect.py --checkpoint checkpoints/best_model.pth --device cuda
+
+# 方法5: Python API
+python
+>>> from detector import LieDetector
+>>> detector = LieDetector.from_checkpoint('checkpoints/best_model.pth')
+>>> result = detector.predict('video.mp4')
+>>> print(f"{result['label_cn']}: {result['confidence']:.2%}")
+```
+
+---
+
+**注意**: 详见下方"完整流程"部分获取更多细节。
 
 ## 📖 完整流程
 
 ### 步骤1: 数据准备
 
-#### 1.1 下载和切片视频
+#### 方法1: 一键运行（推荐）
+
+```bash
+# 使用run_utils.py一键完成所有数据准备工作
+python run_utils.py
+```
+
+**该脚本会自动执行以下步骤：**
+1. 从YouTube下载视频并根据时间戳切片
+2. 生成视频标签CSV文件
+3. 批量提取所有视频的三大特征（人脸、音频、OpenFace）
+
+**输出：**
+- `src/videos/full/` - 完整YouTube视频
+- `src/videos/cut/` - 切片后的视频片段（~1,500个）
+- `src/dataset/video_labels.csv` - 视频标签文件
+- `src/features/` - 预提取的特征文件（~4,300个.pt文件）
+
+**预计时间：**
+- 下载视频：~30-60分钟（取决于网络速度）
+- 切片视频：~10-20分钟
+- 提取特征：~60-90分钟（GPU）或 ~120-180分钟（CPU）
+- **总计：~2-4小时**
+
+---
+
+#### 方法2: 分步执行（可选）
+
+如果需要更细粒度的控制，可以分步执行：
+
+##### 1.1 下载和切片视频
 
 ```bash
 # 从YouTube下载视频并根据时间戳切片
@@ -76,7 +140,7 @@ python -c "from dataloader.video_downloader import VideoDownloader; \
 - 视频数量: ~1,500个片段
 - 标签: truth (说真话) / deception (说谎)
 
-#### 1.2 提取特征
+##### 1.2 提取特征
 
 ```bash
 # 批量提取所有视频的特征
@@ -180,11 +244,17 @@ python train.py \
 #### 3.1 使用detect.py脚本
 
 ```bash
-# 测试数据流（使用未训练模型）
+# 默认测试（随机抽取50个视频，自动计算准确率）
 python detect.py
 
-# 使用训练好的模型（需要修改detect.py加载检查点）
-# 或使用下面的编程接口
+# 单个视频检测
+python detect.py --video path/to/video.mp4
+
+# 批量检测目录下所有视频
+python detect.py --video_dir path/to/videos/
+
+# 指定检查点和设备
+python detect.py --checkpoint checkpoints/best_model.pth --device cuda
 ```
 
 #### 3.2 编程接口（推荐）
@@ -290,8 +360,9 @@ lie_detector/
 │   ├── latest_model.pth     # 最新模型
 │   └── training_history.json # 训练历史
 │
-├── train.py                 # 训练脚本
-├── detect.py                # 检测脚本
+├── run_utils.py             # 数据准备入口 ⭐
+├── train.py                 # 训练脚本 ⭐
+├── detect.py                # 检测脚本 ⭐
 ├── test_fusion_model.py     # 模型测试
 └── README.md                # 本文件
 ```

@@ -88,14 +88,19 @@ class UniEncoder(nn.Module):
             nhead=nhead,
             dim_feedforward=ff_hidden,
             dropout=dropout,
-            batch_first=True
+            batch_first=True,
+            norm_first=False  # 使用post-norm（更稳定）
         )
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        
+        # 添加输出LayerNorm提高稳定性
+        self.output_norm = nn.LayerNorm(d_model, eps=1e-6)
     
     def forward(self, x):
         # x: (B, T, d_in)
         x = self.project_in(x)
         x = self.encoder(x)  # (B, T, d_model)
+        x = self.output_norm(x)  # 额外的归一化
         return x
 
 
@@ -308,15 +313,29 @@ class FusionModel(nn.Module):
         """初始化模型权重"""
         for m in self.modules():
             if isinstance(m, nn.Linear):
-                nn.init.xavier_uniform_(m.weight)
+                # 使用更保守的初始化
+                nn.init.xavier_uniform_(m.weight, gain=0.1)  # 非常小的gain
                 if m.bias is not None:
-                    nn.init.zeros_(m.bias)
-            if isinstance(m, nn.GRU):
+                    nn.init.constant_(m.bias, 0.0)
+            elif isinstance(m, nn.LayerNorm):
+                nn.init.constant_(m.weight, 1.0)
+                nn.init.constant_(m.bias, 0.0)
+            elif isinstance(m, nn.BatchNorm1d):
+                nn.init.constant_(m.weight, 1.0)
+                nn.init.constant_(m.bias, 0.0)
+            elif isinstance(m, nn.GRU):
                 for name, param in m.named_parameters():
                     if 'weight' in name:
-                        nn.init.xavier_uniform_(param)
+                        nn.init.orthogonal_(param, gain=0.1)  # 降低gain
                     elif 'bias' in name:
-                        nn.init.zeros_(param)
+                        nn.init.constant_(param, 0.0)
+            elif isinstance(m, nn.MultiheadAttention):
+                # 初始化注意力层
+                for name, param in m.named_parameters():
+                    if 'weight' in name:
+                        nn.init.xavier_uniform_(param, gain=0.1)
+                    elif 'bias' in name:
+                        nn.init.constant_(param, 0.0)
     
     def forward(self, faces, openfaces, audios):
         """前向传播
@@ -389,6 +408,11 @@ class FusionModel(nn.Module):
         U_of = self.E_uni_of(of_feats)          # (B, hidden)
         U_audio = self.E_uni_audio(audios)      # (B, hidden)
         
+        # 限制数值范围（但不替换NaN）
+        U_face = torch.clamp(U_face, min=-10, max=10)
+        U_of = torch.clamp(U_of, min=-10, max=10)
+        U_audio = torch.clamp(U_audio, min=-10, max=10)
+        
         # --- 跨模态注意力 ---
         X_face1 = self.E_com1_fa(face_feats)  # (B, T, 256)
         X_au1 = self.E_com_au(audios)  # (B, 256)
@@ -398,24 +422,42 @@ class FusionModel(nn.Module):
         # 音频需要扩展时间维度以匹配人脸
         X_au1 = X_au1.unsqueeze(1)  # (B, 1, 256)
         
+        # 限制数值范围
+        X_face1 = torch.clamp(X_face1, min=-10, max=10)
+        X_au1 = torch.clamp(X_au1, min=-10, max=10)
+        X_face2 = torch.clamp(X_face2, min=-10, max=10)
+        X_of1 = torch.clamp(X_of1, min=-10, max=10)
+        
         C_fa_au = self.E_com_fa_au(X_au1, X_face1, X_face1)  # (B, 256)
         C_fa_of = self.E_com_fa_of(X_of1, X_face2, X_face2)  # (B, 256)
         
+        # 限制跨模态注意力输出
+        C_fa_au = torch.clamp(C_fa_au, min=-10, max=10)
+        C_fa_of = torch.clamp(C_fa_of, min=-10, max=10)
+        
         # --- 动态权重 ---
         W_scores = self.W(U_face, U_of, U_audio)
+        # 添加数值稳定性：限制权重分数范围
+        W_scores = torch.clamp(W_scores, min=-10, max=10)
         W = F.softmax(W_scores, dim=1)
         
+        # 检查权重是否有效
+        if torch.isnan(W).any() or torch.isinf(W).any():
+            # 如果权重异常，使用均匀权重
+            W = torch.ones_like(W) / 3.0
+        
         # 加权
-        U_face = W[:, 0:1] * U_face
-        U_of = W[:, 1:2] * U_of
-        U_audio = W[:, 2:3] * U_audio
+        U_face_weighted = W[:, 0:1] * U_face
+        U_of_weighted = W[:, 1:2] * U_of
+        U_audio_weighted = W[:, 2:3] * U_audio
         
         # --- 融合 ---
-        fuse_fa_au = torch.cat([U_face, U_audio, C_fa_au], dim=-1)  # (B, 3*hidden)
-        fuse_fa_of = torch.cat([U_face, U_of, C_fa_of], dim=-1)     # (B, 3*hidden)
+        fuse_fa_au = torch.cat([U_face_weighted, U_audio_weighted, C_fa_au], dim=-1)  # (B, 3*hidden)
+        fuse_fa_of = torch.cat([U_face_weighted, U_of_weighted, C_fa_of], dim=-1)     # (B, 3*hidden)
         
         # 余弦相似度（添加eps防止除零）
         eps = 1e-8
+        # 使用原始特征计算余弦相似度（不是加权后的）
         cos_fa_fa_au = F.cosine_similarity(U_face, C_fa_au, dim=1, eps=eps)
         cos_fa_fa_of = F.cosine_similarity(U_face, C_fa_of, dim=1, eps=eps)
         cos_au_fa_au = F.cosine_similarity(U_audio, C_fa_au, dim=1, eps=eps)
@@ -424,12 +466,18 @@ class FusionModel(nn.Module):
         # 分类
         logits_fa_au = self.prob_fa_au(fuse_fa_au)
         logits_fa_of = self.prob_fa_of(fuse_fa_of)
+        
+        # 限制数值范围
+        logits_fa_au = torch.clamp(logits_fa_au, min=-100, max=100)
+        logits_fa_of = torch.clamp(logits_fa_of, min=-100, max=100)
+        
         probs_fa_au = F.softmax(logits_fa_au, dim=1)
         probs_fa_of = F.softmax(logits_fa_of, dim=1)
         
         # 最终融合概率和logits
         # 使用加权平均的logits而不是概率
         fused_logits = W[:, 2:3]*logits_fa_au + W[:, 1:2]*logits_fa_of + W[:, 0:1]*logits_face
+        fused_logits = torch.clamp(fused_logits, min=-100, max=100)
         fused_probs = F.softmax(fused_logits, dim=1)
         
         ret = {

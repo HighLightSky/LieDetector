@@ -127,11 +127,50 @@ class FusionModelTrainer:
             optimizer.zero_grad()
             output = self.model(faces, openfaces, audios)
             
+            # 检查输出是否有NaN/Inf
+            has_nan_output = False
+            for key, logits in output['logits'].items():
+                if torch.isnan(logits).any() or torch.isinf(logits).any():
+                    has_nan_output = True
+                    break
+            
+            if has_nan_output:
+                print(f"\n[WARNING] 前向传播产生NaN/Inf，跳过此批次")
+                continue
+            
             # 计算损失
             loss, losses = self.compute_loss(output, labels, return_details=True)
             
+            # 检查损失是否有效
+            if torch.isnan(loss) or torch.isinf(loss):
+                print(f"\n[WARNING] NaN/Inf loss detected, skipping batch")
+                continue
+            
             # 反向传播
             loss.backward()
+            
+            # 检查梯度是否有NaN/Inf
+            has_nan_grad = False
+            for name, param in self.model.named_parameters():
+                if param.grad is not None:
+                    if torch.isnan(param.grad).any() or torch.isinf(param.grad).any():
+                        has_nan_grad = True
+                        break
+            
+            if has_nan_grad:
+                print(f"\n[WARNING] 梯度包含NaN/Inf，跳过此批次的参数更新")
+                optimizer.zero_grad()
+                continue
+            
+            # 梯度裁剪（防止梯度爆炸）
+            grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+            
+            # 如果梯度范数过大，也跳过
+            if grad_norm > 10.0:
+                print(f"\n[WARNING] 梯度范数过大 ({grad_norm:.2f})，跳过此批次")
+                optimizer.zero_grad()
+                continue
+            
             optimizer.step()
             
             # 统计
@@ -149,10 +188,20 @@ class FusionModelTrainer:
                 loss_details[key] += val * batch_size
             
             # 更新进度条
-            pbar.set_postfix({
-                'loss': f'{loss.item():.4f}',
-                'acc': f'{100.0 * correct / total:.2f}%'
-            })
+            if total > 0:
+                pbar.set_postfix({
+                    'loss': f'{loss.item():.4f}',
+                    'acc': f'{100.0 * correct / total:.2f}%'
+                })
+        
+        # 防止除零
+        if total == 0:
+            print("\n[ERROR] 所有批次都被跳过（NaN/Inf），无法计算损失")
+            return {
+                'loss': float('inf'),
+                'accuracy': 0.0,
+                'loss_detail': {key: float('inf') for key in loss_details.keys()}
+            }
         
         avg_loss = total_loss / total
         accuracy = 100.0 * correct / total
@@ -233,7 +282,7 @@ class FusionModelTrainer:
     def train(
         self,
         num_epochs: int = 30,
-        lr: float = 1e-4,
+        lr: float = 1e-5,  # 降低到非常低的学习率
         weight_decay: float = 1e-4,
         patience: int = 5,
         verbose: bool = True
@@ -259,15 +308,16 @@ class FusionModelTrainer:
         optimizer = torch.optim.AdamW(
             trainable_params,
             lr=lr,
-            weight_decay=weight_decay
+            weight_decay=weight_decay,
+            eps=1e-8,  # 增加数值稳定性
+            betas=(0.9, 0.999)  # 默认值
         )
         
-        # 学习率调度器
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        # 学习率调度器 - 使用余弦退火而不是ReduceLROnPlateau
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer,
-            mode='max',
-            factor=0.5,
-            patience=patience
+            T_max=num_epochs,
+            eta_min=lr * 0.01  # 最小学习率为初始的1%
         )
         
         # 训练循环
@@ -309,7 +359,9 @@ class FusionModelTrainer:
             self.history['val_loss_detail'].append(val_metrics['loss_detail'])
             
             # 学习率调度
-            scheduler.step(val_metrics['accuracy'])
+            scheduler.step()
+            current_lr = optimizer.param_groups[0]['lr']
+            print(f"当前学习率: {current_lr:.2e}")
             
             # 保存最佳模型
             if val_metrics['accuracy'] > self.best_val_acc:
