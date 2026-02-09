@@ -41,9 +41,17 @@ pip install -r requirements_win.txt
 # 测试推理流程（使用未训练模型）
 python detect.py
 
-# 测试训练流程（小批量数据）
-python test_fusion_model.py
+# 测试训练流程（已验证可正常运行）
+python train.py --num_epochs 2 --batch_size 8 --visual_hidden 128 --fusion_hidden 64
+
+# 完整训练流程（需要先准备数据）
+# 1. 下载和切片视频
+# 2. 提取特征
+# 3. 训练模型
+# 详见下方"完整流程"部分
 ```
+
+**训练状态**: ✅ 已验证可正常运行（无NaN，损失正常下降）
 
 ## 📖 完整流程
 
@@ -115,14 +123,36 @@ python train.py \
     --batch_size 16 \
     --lr 1e-4 \
     --visual_hidden 512 \
-    --fusion_hidden 256
+    --fusion_hidden 256 \
+    --dropout 0.3
 ```
 
 #### 2.3 从检查点恢复
 
 ```bash
 # 从上次中断的地方继续训练
-python train.py --resume checkpoints/latest_model.pth
+python train.py --resume latest_model.pth
+```
+
+#### 2.4 完整参数说明
+
+```bash
+python train.py \
+    --csv_path src/dataset/video_labels.csv \     # 标签文件
+    --features_dir src/features \                  # 特征目录
+    --use_openface \                               # 使用OpenFace特征
+    --num_epochs 30 \                              # 训练轮数
+    --batch_size 8 \                               # 批次大小
+    --lr 1e-4 \                                    # 学习率
+    --weight_decay 1e-4 \                          # 权重衰减
+    --patience 5 \                                 # 早停耐心值
+    --val_split 0.2 \                              # 验证集比例
+    --visual_hidden 256 \                          # 视觉隐藏层维度
+    --fusion_hidden 128 \                          # 融合隐藏层维度
+    --dropout 0.3 \                                # Dropout比例
+    --device cuda \                                # 设备 (cuda/cpu)
+    --save_dir checkpoints \                       # 保存目录
+    --seed 42                                      # 随机种子
 ```
 
 **训练策略**:
@@ -131,33 +161,33 @@ python train.py --resume checkpoints/latest_model.pth
   - Face-Audio融合、Face-OpenFace融合
   - 最终融合（主任务）
 - **冻结Backbone**: MobileNetV3保持冻结，只训练融合层
-- **加权损失**: 融合任务权重最高
-- **早停机制**: 防止过拟合
+- **加权损失**: 融合任务权重最高（1.0），其他任务辅助（0.15-0.2）
+- **早停机制**: 防止过拟合，自动保存最佳模型
+- **学习率调度**: 验证准确率不提升时自动降低学习率
 
 **输出**:
-- `checkpoints/best_model.pth` - 最佳模型
-- `checkpoints/latest_model.pth` - 最新模型
-- `checkpoints/training_history.json` - 训练历史
+- `checkpoints/best_model.pth` - 最佳模型（验证准确率最高）
+- `checkpoints/latest_model.pth` - 最新模型（每个epoch更新）
+- `checkpoints/training_history.json` - 训练历史（损失、准确率曲线）
 
-**预计时间**: 30-60分钟（取决于数据量和硬件）
+**预计时间**: 
+- 小数据集（<100样本）: 10-20分钟
+- 中等数据集（100-1000样本）: 30-60分钟
+- 大数据集（>1000样本）: 1-2小时
 
 ### 步骤3: 模型预测
 
-#### 3.1 单个视频预测
+#### 3.1 使用detect.py脚本
 
 ```bash
-# 使用训练好的模型预测
-python detect.py --checkpoint checkpoints/best_model.pth --video path/to/video.mp4
+# 测试数据流（使用未训练模型）
+python detect.py
+
+# 使用训练好的模型（需要修改detect.py加载检查点）
+# 或使用下面的编程接口
 ```
 
-#### 3.2 批量预测
-
-```bash
-# 批量检测多个视频
-python detect.py --checkpoint checkpoints/best_model.pth --batch
-```
-
-#### 3.3 编程接口
+#### 3.2 编程接口（推荐）
 
 ```python
 from detector import LieDetector
@@ -168,12 +198,19 @@ detector = LieDetector.from_checkpoint(
     device='cuda'
 )
 
-# 预测
+# 单个视频预测
 result = detector.predict('video.mp4', verbose=True)
 
 print(f"预测: {result['label_cn']}")
 print(f"置信度: {result['confidence']:.2%}")
 print(f"模态权重: {result['weights']}")
+
+# 批量预测
+video_paths = ['video1.mp4', 'video2.mp4', 'video3.mp4']
+results = detector.predict_batch(video_paths, verbose=False)
+
+for i, result in enumerate(results):
+    print(f"视频{i+1}: {result['label_cn']} ({result['confidence']:.2%})")
 ```
 
 **输出格式**:
@@ -184,15 +221,26 @@ print(f"模态权重: {result['weights']}")
     'label_cn': '说真话',         # 中文标签
     'confidence': 0.85,           # 置信度
     'probs': {
-        'face': [0.6, 0.4],
-        'openface': [0.7, 0.3],
-        'audio': [0.8, 0.2],
-        'fused': [0.85, 0.15]     # 最终概率
+        'face': [0.6, 0.4],       # 人脸模态概率
+        'openface': [0.7, 0.3],   # OpenFace模态概率
+        'audio': [0.8, 0.2],      # 音频模态概率
+        'fa_au': [0.75, 0.25],    # Face-Audio融合概率
+        'fa_of': [0.72, 0.28],    # Face-OpenFace融合概率
+        'fused': [0.85, 0.15]     # 最终融合概率
     },
     'weights': {
         'face': 0.4,              # 人脸权重
         'openface': 0.3,          # OpenFace权重
         'audio': 0.3              # 音频权重
+    },
+    'details': {
+        'cosine_similarities': {  # 余弦相似度
+            'fa_fa_au': 0.85,
+            'fa_fa_of': 0.82,
+            'au_fa_au': 0.78,
+            'of_fa_of': 0.80
+        },
+        'video_path': 'video.mp4'
     }
 }
 ```
@@ -344,11 +392,12 @@ lie_detector/
 - [数据流](docs/数据流.md) - 每一层的张量形状变化
 - [模型API速查表](docs/模型API速查表.md) - API参考手册
 - [训练方案](docs/训练方案.md) - 完整训练策略
+- [训练示例](docs/训练示例.md) - 不同场景的训练示例 ⭐
 
 ### 模块文档
 
-- [训练器使用指南](trainer/README.md) - 训练器详细说明
 - [检测器使用指南](detector/README.md) - 检测器详细说明
+- [训练器使用指南](trainer/README.md) - 训练器详细说明（如果存在）
 
 ## 🔧 配置说明
 

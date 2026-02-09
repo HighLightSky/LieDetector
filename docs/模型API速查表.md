@@ -479,6 +479,32 @@ print(f"置信度: {result['confidence']:.2%}")
 
 ### 2. 完整训练流程
 
+**方法1: 使用命令行脚本（推荐）**
+
+```bash
+# 基本训练
+python train.py
+
+# 自定义参数
+python train.py \
+    --num_epochs 50 \
+    --batch_size 16 \
+    --lr 1e-4 \
+    --visual_hidden 512 \
+    --fusion_hidden 256 \
+    --dropout 0.3 \
+    --device cuda \
+    --save_dir checkpoints
+
+# 从检查点恢复
+python train.py --resume latest_model.pth
+
+# 查看所有参数
+python train.py --help
+```
+
+**方法2: 使用Python代码**
+
 ```python
 from models.fusion import FusionModel
 from trainer import FusionModelTrainer, LieDetectionDataset

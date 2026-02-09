@@ -267,8 +267,7 @@ class FusionModelTrainer:
             optimizer,
             mode='max',
             factor=0.5,
-            patience=patience,
-            verbose=True
+            patience=patience
         )
         
         # 训练循环
@@ -317,7 +316,7 @@ class FusionModelTrainer:
                 self.best_val_acc = val_metrics['accuracy']
                 self.best_epoch = epoch + 1
                 self.save_checkpoint('best_model.pth', epoch + 1)
-                print(f"✓ 保存最佳模型 (验证准确率: {self.best_val_acc:.2f}%)")
+                print(f"[OK] 保存最佳模型 (验证准确率: {self.best_val_acc:.2f}%)")
                 no_improve_count = 0
             else:
                 no_improve_count += 1
@@ -361,7 +360,7 @@ class FusionModelTrainer:
         self.history = checkpoint['history']
         if 'loss_weights' in checkpoint:
             self.loss_weights = checkpoint['loss_weights']
-        print(f"✓ 加载检查点: {filename}")
+        print(f"[OK] 加载检查点: {filename}")
         print(f"  Epoch: {checkpoint['epoch']}")
         print(f"  最佳验证准确率: {self.best_val_acc:.2f}%")
     
@@ -370,4 +369,4 @@ class FusionModelTrainer:
         history_path = self.save_dir / 'training_history.json'
         with open(history_path, 'w') as f:
             json.dump(self.history, f, indent=2)
-        print(f"✓ 训练历史保存到: {history_path}")
+        print(f"[OK] 训练历史保存到: {history_path}")

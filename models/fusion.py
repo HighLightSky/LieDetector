@@ -181,12 +181,12 @@ class FusionModel(nn.Module):
             nn.Linear(self.face_feat_dim, self.ds),
             nn.ReLU(inplace=True),
             nn.Dropout(dropout),
-            UniEncoder(d_in=self.ds, d_model=self.hidden, nhead=uni_nhead, 
-                      num_layers=uni_layers, ff_hidden=self.hidden*2, dropout=dropout),
+            UniEncoder(d_in=self.ds, d_model=self.ds, nhead=uni_nhead, 
+                      num_layers=uni_layers, ff_hidden=self.ds*2, dropout=dropout),
             Transpose(1, 2),
             nn.AdaptiveAvgPool1d(output_size=1),
             nn.Flatten(),
-            nn.Linear(256, 256),
+            nn.Linear(self.ds, self.ds),
             nn.ReLU(),
             nn.Dropout(0.1)
         )
@@ -195,12 +195,12 @@ class FusionModel(nn.Module):
             nn.Linear(self.openface_feat_dim, self.ds),
             nn.ReLU(inplace=True),
             nn.Dropout(dropout),
-            UniEncoder(d_in=self.ds, d_model=self.hidden, nhead=uni_nhead,
-                      num_layers=uni_layers, ff_hidden=self.hidden*2, dropout=dropout),
+            UniEncoder(d_in=self.ds, d_model=self.ds, nhead=uni_nhead,
+                      num_layers=uni_layers, ff_hidden=self.ds*2, dropout=dropout),
             Transpose(1, 2),
             nn.AdaptiveAvgPool1d(output_size=1),
             nn.Flatten(),
-            nn.Linear(256, 256),
+            nn.Linear(self.ds, self.ds),
             nn.ReLU(),
             nn.Dropout(0.1)
         )
@@ -240,39 +240,39 @@ class FusionModel(nn.Module):
             Transpose(1, 2),
             nn.AdaptiveAvgPool1d(output_size=1),
             nn.Flatten(),
-            nn.Linear(256, 256),
+            nn.Linear(self.ds, self.ds),
             nn.ReLU(),
             nn.Dropout(0.1)
         )
         
-        self.E_com_fa_au = CrossAttentionBlock(dim_q=self.hidden, dim_kv=self.hidden, num_heads=com_heads)
-        self.E_com_fa_of = CrossAttentionBlock(dim_q=self.hidden, dim_kv=self.hidden, num_heads=com_heads)
+        self.E_com_fa_au = CrossAttentionBlock(dim_q=self.ds, dim_kv=self.ds, num_heads=com_heads)
+        self.E_com_fa_of = CrossAttentionBlock(dim_q=self.ds, dim_kv=self.ds, num_heads=com_heads)
         
         # 动态权重学习
-        self.W = W(self.hidden)
+        self.W = W(self.ds)
         
         # 融合分类头
         self.prob_fa_au = nn.Sequential(
-            nn.Linear(self.hidden*3, self.hidden),
+            nn.Linear(self.ds*3, self.ds),
             nn.ReLU(inplace=True),
             nn.Dropout(dropout),
-            nn.Linear(self.hidden, 2)
+            nn.Linear(self.ds, 2)
         )
         
         self.prob_fa_of = nn.Sequential(
-            nn.Linear(self.hidden*3, self.hidden),
+            nn.Linear(self.ds*3, self.ds),
             nn.ReLU(inplace=True),
             nn.Dropout(dropout),
-            nn.Linear(self.hidden, 2)
+            nn.Linear(self.ds, 2)
         )
         
         # 时序模块（GRU）
-        self.T = nn.GRU(self.hidden, self.hidden // 2, num_layers=1, 
+        self.T = nn.GRU(self.ds, self.ds // 2, num_layers=1, 
                        bidirectional=True, batch_first=True)
         
         # 视觉分类头
         self.visual_fc = nn.Sequential(
-            nn.Linear(self.hidden, fusion_hidden),
+            nn.Linear(self.ds, fusion_hidden),
             nn.ReLU(inplace=True),
             nn.Dropout(dropout),
             nn.Linear(fusion_hidden, num_classes)
@@ -362,8 +362,16 @@ class FusionModel(nn.Module):
         of = openfaces.to(device, dtype=torch.float32)
         if of.ndim == 3:
             B_of, T_of, D = of.shape
-            if not (B_of == B and T_of == T):
-                raise ValueError(f"Mismatch shapes: faces ({B},{T}) vs openfaces ({B_of},{T_of})")
+            if B_of != B:
+                raise ValueError(f"Batch size mismatch: faces ({B}) vs openfaces ({B_of})")
+            
+            # 如果帧数不匹配，插值到相同长度
+            if T_of != T:
+                # 转换为 (B, D, T_of) 进行插值
+                of = of.permute(0, 2, 1)  # (B, 714, T_of)
+                of = F.interpolate(of, size=T, mode='linear', align_corners=False)
+                of = of.permute(0, 2, 1)  # (B, T, 714)
+            
             of_feats = of
             of_proc = of.view(B * T, D)
             of_frame_logits = self.openface(of_proc).view(B, T, -1)
@@ -380,13 +388,16 @@ class FusionModel(nn.Module):
         U_audio = self.E_uni_audio(audios)      # (B, hidden)
         
         # --- 跨模态注意力 ---
-        X_face1 = self.E_com1_fa(face_feats)
-        X_au1 = self.E_com_au(audios)
-        X_face2 = self.E_com2_fa(face_feats)
-        X_of1 = self.E_com_of(of_feats)
+        X_face1 = self.E_com1_fa(face_feats)  # (B, T, 256)
+        X_au1 = self.E_com_au(audios)  # (B, 256)
+        X_face2 = self.E_com2_fa(face_feats)  # (B, T, 256)
+        X_of1 = self.E_com_of(of_feats)  # (B, 256)
         
-        C_fa_au = self.E_com_fa_au(X_au1, X_face1, X_face1)
-        C_fa_of = self.E_com_fa_of(X_of1, X_face2, X_face2)
+        # 音频需要扩展时间维度以匹配人脸
+        X_au1 = X_au1.unsqueeze(1)  # (B, 1, 256)
+        
+        C_fa_au = self.E_com_fa_au(X_au1, X_face1, X_face1)  # (B, 256)
+        C_fa_of = self.E_com_fa_of(X_of1, X_face2, X_face2)  # (B, 256)
         
         # --- 动态权重 ---
         W_scores = self.W(U_face, U_of, U_audio)
@@ -401,11 +412,12 @@ class FusionModel(nn.Module):
         fuse_fa_au = torch.cat([U_face, U_audio, C_fa_au], dim=-1)  # (B, 3*hidden)
         fuse_fa_of = torch.cat([U_face, U_of, C_fa_of], dim=-1)     # (B, 3*hidden)
         
-        # 余弦相似度
-        cos_fa_fa_au = torch.nn.functional.cosine_similarity(U_face, C_fa_au, dim=1)
-        cos_fa_fa_of = torch.nn.functional.cosine_similarity(U_face, C_fa_of, dim=1)
-        cos_au_fa_au = torch.nn.functional.cosine_similarity(U_audio, C_fa_au, dim=1)
-        cos_of_fa_of = torch.nn.functional.cosine_similarity(U_of, C_fa_of, dim=1)
+        # 余弦相似度（添加eps防止除零）
+        eps = 1e-8
+        cos_fa_fa_au = F.cosine_similarity(U_face, C_fa_au, dim=1, eps=eps)
+        cos_fa_fa_of = F.cosine_similarity(U_face, C_fa_of, dim=1, eps=eps)
+        cos_au_fa_au = F.cosine_similarity(U_audio, C_fa_au, dim=1, eps=eps)
+        cos_of_fa_of = F.cosine_similarity(U_of, C_fa_of, dim=1, eps=eps)
         
         # 分类
         logits_fa_au = self.prob_fa_au(fuse_fa_au)
@@ -413,8 +425,10 @@ class FusionModel(nn.Module):
         probs_fa_au = F.softmax(logits_fa_au, dim=1)
         probs_fa_of = F.softmax(logits_fa_of, dim=1)
         
-        # 最终融合概率
-        fused_probs = W[:, 2:3]*probs_fa_au + W[:, 1:2]*probs_fa_of + W[:, 0:1]*probs_face
+        # 最终融合概率和logits
+        # 使用加权平均的logits而不是概率
+        fused_logits = W[:, 2:3]*logits_fa_au + W[:, 1:2]*logits_fa_of + W[:, 0:1]*logits_face
+        fused_probs = F.softmax(fused_logits, dim=1)
         
         ret = {
             'logits': {
@@ -423,6 +437,7 @@ class FusionModel(nn.Module):
                 'audio': logits_au,
                 'fa_au': logits_fa_au,
                 'fa_of': logits_fa_of,
+                'fused': fused_logits  # 添加融合logits
             },
             'probs': {
                 'face': probs_face,
