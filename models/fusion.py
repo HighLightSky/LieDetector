@@ -81,6 +81,8 @@ class UniEncoder(nn.Module):
     def __init__(self, d_in, d_model=256, nhead=4, num_layers=2, ff_hidden=512, dropout=0.1):
         super().__init__()
         self.project_in = nn.Identity() if d_in == d_model else nn.Linear(d_in, d_model)
+        # nn.Identity()（恒等映射）
+
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=nhead,
@@ -101,7 +103,7 @@ class FusionModel(nn.Module):
     """多模态融合模型
     
     特点：
-    1. 直接使用高维特征（不是logits）
+    1. 直接使用特征序列高维特征
     2. Transformer时序建模
     3. Cross-Attention跨模态交互
     4. 动态权重学习

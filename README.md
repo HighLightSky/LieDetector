@@ -393,11 +393,18 @@ lie_detector/
 - [模型API速查表](docs/模型API速查表.md) - API参考手册
 - [训练方案](docs/训练方案.md) - 完整训练策略
 - [训练示例](docs/训练示例.md) - 不同场景的训练示例 ⭐
+- [时序建模详解](docs/时序建模详解.md) - 时序建模机制详解 🆕
+- [时序建模可视化](docs/时序建模可视化.md) - 时序建模可视化说明 🆕
 
 ### 模块文档
 
 - [检测器使用指南](detector/README.md) - 检测器详细说明
 - [训练器使用指南](trainer/README.md) - 训练器详细说明（如果存在）
+
+### 训练相关
+
+- [TRAINING_GUIDE.md](TRAINING_GUIDE.md) - 快速训练指南
+- [TRAINING_SUCCESS.md](TRAINING_SUCCESS.md) - 训练成功确认 ✅
 
 ## 🔧 配置说明
 
