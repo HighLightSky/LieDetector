@@ -9,11 +9,129 @@ import pandas as pd
 from pathlib import Path
 from tqdm import tqdm
 import argparse
-from typing import Optional
+from typing import Optional, List, Dict
 
-from face_extractor import FaceExtractor
-from openface_extractor import OpenFaceExtractor
-from audio_extractor import AudioExtractor
+from .face_extractor import FaceExtractor
+from .openface_extractor import OpenFaceExtractor
+from .audio_extractor import AudioExtractor
+
+
+def precompute_all_features(
+    video_list: List[Dict],
+    output_dir: str,
+    extract_faces: bool = True,
+    extract_openface: bool = True,
+    extract_audio: bool = True,
+    num_frames: int = 16,
+    device: str = 'cpu'
+) -> int:
+    """批量预提取特征（简化版）
+    
+    Args:
+        video_list: 视频列表，每个元素包含 video_path, label, video_id
+        output_dir: 输出目录
+        extract_faces: 是否提取人脸特征
+        extract_openface: 是否提取 OpenFace 特征
+        extract_audio: 是否提取音频特征
+        num_frames: 提取的帧数
+        device: 设备
+    
+    Returns:
+        成功处理的视频数量
+    """
+    # 创建输出目录
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    print(f"输出目录: {output_dir}")
+    print(f"总共 {len(video_list)} 个视频")
+    
+    # 初始化提取器
+    extractors = {}
+    
+    if extract_faces:
+        print("初始化 FaceExtractor...")
+        extractors['face'] = FaceExtractor(
+            method='opencv',
+            num_frames=num_frames,
+            device=device
+        )
+    
+    if extract_openface:
+        try:
+            print("初始化 OpenFaceExtractor...")
+            extractors['openface'] = OpenFaceExtractor(
+                openface_path=None,
+                num_frames=num_frames
+            )
+        except Exception as e:
+            print(f"⚠️  OpenFace 初始化失败，跳过: {e}")
+            extract_openface = False
+    
+    if extract_audio:
+        print("初始化 AudioExtractor...")
+        extractors['audio'] = AudioExtractor(
+            method='wav2vec2',
+            device=device
+        )
+    
+    print("\n开始提取特征...")
+    
+    # 统计
+    success_count = 0
+    fail_count = 0
+    
+    # 遍历视频
+    for item in tqdm(video_list, desc="提取特征"):
+        video_path = Path(item['video_path'])
+        video_id = item['video_id']
+        
+        if not video_path.exists():
+            print(f"\n⚠️  视频不存在: {video_path}")
+            fail_count += 1
+            continue
+        
+        try:
+            # 提取面部图像
+            if extract_faces:
+                try:
+                    faces = extractors['face'](video_path, return_tensor=True)
+                    torch.save(faces, output_dir / f'{video_id}_faces.pt')
+                except Exception as e:
+                    print(f"\n⚠️  人脸提取失败 {video_id}: {e}")
+            
+            # 提取 OpenFace 特征
+            if extract_openface:
+                try:
+                    openfaces = extractors['openface'](video_path, return_tensor=True)
+                    torch.save(openfaces, output_dir / f'{video_id}_openface.pt')
+                except Exception as e:
+                    print(f"\n⚠️  OpenFace 提取失败 {video_id}: {e}")
+            
+            # 提取音频特征
+            if extract_audio:
+                try:
+                    audios = extractors['audio'](video_path, from_video=True, return_tensor=True)
+                    torch.save(audios, output_dir / f'{video_id}_audio.pt')
+                except Exception as e:
+                    print(f"\n⚠️  音频提取失败 {video_id}: {e}")
+            
+            success_count += 1
+            
+        except Exception as e:
+            print(f"\n❌ 提取失败 {video_id}: {e}")
+            fail_count += 1
+            continue
+    
+    # 打印统计
+    print("\n" + "=" * 50)
+    print("特征提取完成!")
+    print(f"✅ 成功: {success_count}")
+    print(f"❌ 失败: {fail_count}")
+    print(f"📊 总计: {len(video_list)}")
+    print("=" * 50)
+    
+    return success_count
 
 
 def precompute_features(
