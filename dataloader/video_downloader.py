@@ -314,10 +314,83 @@ class VideoDownloader:
         
         print(f"\n切片完成: 成功 {success_count}, 失败 {fail_count}")
     
+    def generate_dataset_csv(self):
+        """生成数据集 CSV 文件
+        
+        遍历所有切片视频，根据文件名中的关键词分类
+        - 包含 'lie' 或 'deception': deception (说谎)
+        - 包含 'truth' 或 'true': truth (说真话)
+        """
+        print("\n" + "="*60)
+        print("步骤 3: 生成数据集 CSV")
+        print("="*60)
+        
+        # 创建输出目录
+        dataset_dir = Path('src/dataset')
+        dataset_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 收集所有视频文件
+        video_files = list(self.cut_video_dir.glob('*.mp4'))
+        
+        if not video_files:
+            print("⚠️  未找到任何视频文件")
+            return
+        
+        print(f"找到 {len(video_files)} 个视频文件")
+        
+        # 分类统计
+        deception_count = 0
+        truth_count = 0
+        unknown_count = 0
+        
+        # 准备 CSV 数据
+        csv_data = []
+        
+        for video_file in sorted(video_files):
+            filename = video_file.stem  # 不含后缀的文件名
+            filename_lower = filename.lower()
+            
+            # 根据文件名判断类型
+            # 优先检查 'lie' 和 'deception'（说谎）
+            if 'lie' in filename_lower or 'deception' in filename_lower:
+                label = 'deception'
+                deception_count += 1
+            # 然后检查 'truth' 和 'true'（说真话）
+            elif 'truth' in filename_lower or 'true' in filename_lower:
+                label = 'truth'
+                truth_count += 1
+            else:
+                label = 'unknown'
+                unknown_count += 1
+                print(f"  ⚠️  无法识别类型: {filename}")
+            
+            csv_data.append({
+                'video_name': filename,
+                'label': label
+            })
+        
+        # 保存 CSV 文件
+        csv_path = dataset_dir / 'video_labels.csv'
+        
+        with open(csv_path, 'w', encoding='utf-8', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=['video_name', 'label'])
+            writer.writeheader()
+            writer.writerows(csv_data)
+        
+        print(f"\n✓ CSV 文件已生成: {csv_path}")
+        print(f"\n分类统计:")
+        print(f"  - 说谎 (deception): {deception_count} 个")
+        print(f"  - 说真话 (truth): {truth_count} 个")
+        if unknown_count > 0:
+            print(f"  - 未知类型: {unknown_count} 个")
+        print(f"  - 总计: {len(csv_data)} 个")
+        
+        return csv_path
+    
     def generate_report(self):
         """生成下载和切片报告"""
         print("\n" + "="*60)
-        print("步骤 3: 生成报告")
+        print("步骤 4: 生成报告")
         print("="*60)
         
         report_path = Path('dataloader/video_download_report.md')
@@ -418,6 +491,9 @@ class VideoDownloader:
         
         # 切片视频
         self.cut_all_videos()
+        
+        # 生成数据集 CSV
+        self.generate_dataset_csv()
         
         # 生成报告
         self.generate_report()

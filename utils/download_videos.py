@@ -5,7 +5,7 @@
 from dataloader.video_downloader import VideoDownloader
 
 
-if __name__ == '__main__':
+def download_videos():
     # 创建下载器实例
     downloader = VideoDownloader(
         csv_path='src/DOLOS/dolos_timestamps.csv',
