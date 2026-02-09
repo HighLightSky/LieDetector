@@ -1,3 +1,7 @@
+"""
+运行入口
+"""
+
 from utils import generate_dataset_csv
 
 if __name__ == '__main__':
