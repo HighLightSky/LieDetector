@@ -15,5 +15,5 @@ if __name__ == '__main__':
     # process_data.preprocess_features()
 
     # 根据当前训练日志绘制训练曲线
-    visualizer = experiment_tools.ExperimentVisualizer(r"checkpoints\history\train_history_20260210_183013.json")
+    visualizer = experiment_tools.ExperimentVisualizer(r"checkpoints\history\train_history_20260210_205729.json")
     visualizer.plot_combined_overview()
