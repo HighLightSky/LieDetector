@@ -54,6 +54,20 @@ class TrainingLoop:
                 continue
             
             loss.backward()
+            
+            # 检查梯度有效性
+            has_nan_grad = False
+            for name, param in self.model.named_parameters():
+                if param.grad is not None:
+                    if torch.isnan(param.grad).any() or torch.isinf(param.grad).any():
+                        has_nan_grad = True
+                        break
+            
+            if has_nan_grad:
+                print(f"[WARNING] 跳过批次：梯度包含 NaN/Inf")
+                optimizer.zero_grad()
+                continue
+            
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
             optimizer.step()
             

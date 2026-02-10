@@ -34,10 +34,10 @@ def parse_args():
                         help='批次大小')
     parser.add_argument('--lr', type=float, default=1e-5,
                         help='学习率（非常低以确保稳定性）')
-    parser.add_argument('--weight_decay', type=float, default=1e-4,
-                        help='权重衰减')
-    parser.add_argument('--patience', type=int, default=5,
-                        help='早停耐心值')
+    parser.add_argument('--weight_decay', type=float, default=2e-4,
+                        help='权重衰减（适度增加以减少过拟合）')
+    parser.add_argument('--patience', type=int, default=7,
+                        help='早停耐心值（增加到7以允许更多探索）')
     parser.add_argument('--val_split', type=float, default=0.2,
                         help='验证集比例')
     
@@ -224,13 +224,13 @@ def main():
     # 6. 创建训练器
     print("\n[6] 创建训练器...")
     
-    # 损失权重配置
+    # 损失权重配置（适度增加辅助融合分支权重）
     loss_weights = {
         'face': 0.2,        # 人脸分类损失
         'openface': 0.2,    # OpenFace分类损失
         'audio': 0.2,       # 音频分类损失
-        'fa_au': 0.15,      # Face-Audio融合损失
-        'fa_of': 0.15,      # Face-OpenFace融合损失
+        'fa_au': 0.2,       # Face-Audio融合损失（从0.15增加到0.2）
+        'fa_of': 0.2,       # Face-OpenFace融合损失（从0.15增加到0.2）
         'fused': 1.0        # 最终融合损失（权重最高）
     }
     
@@ -243,9 +243,9 @@ def main():
         loss_weights=loss_weights
     )
 
-    # 启用正则化
-    trainer.loss_computer.ent_reg_weight = 0.2  # 熵正则化
-    trainer.loss_computer.w_mse_weight = 0.05   # 权重一致性
+    # 启用正则化（降低正则化强度以避免数值不稳定）
+    trainer.loss_computer.ent_reg_weight = 0.1   # 熵正则化（从0.2降低到0.1）
+    trainer.loss_computer.w_mse_weight = 0.02    # 权重一致性（从0.05降低到0.02）
     
     print("  训练器创建成功")
     print("  损失权重配置:")
