@@ -242,6 +242,10 @@ def main():
         save_dir=args.save_dir,
         loss_weights=loss_weights
     )
+
+    # 启用正则化
+    trainer.loss_computer.ent_reg_weight = 0.2  # 熵正则化
+    trainer.loss_computer.w_mse_weight = 0.05   # 权重一致性
     
     print("  训练器创建成功")
     print("  损失权重配置:")
