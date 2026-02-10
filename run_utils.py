@@ -14,6 +14,6 @@ if __name__ == '__main__':
     # 提取所有cut视频的三大特征，并保存
     # process_data.preprocess_features()
 
-    # 根据当前
+    # 根据当前训练日志绘制训练曲线
     visualizer = experiment_tools.ExperimentVisualizer("checkpoints/training_history.json")
     visualizer.plot_combined_overview()

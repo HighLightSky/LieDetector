@@ -5,7 +5,8 @@
 
 import json
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
+from datetime import datetime
 
 
 class HistoryTracker:
@@ -24,6 +25,7 @@ class HistoryTracker:
             'train_loss_detail': [],
             'val_loss_detail': []
         }
+        self.config = {}  # 存储训练配置
     
     def record_epoch(
         self,
@@ -46,18 +48,51 @@ class HistoryTracker:
         if 'loss_detail' in val_metrics:
             self.history['val_loss_detail'].append(val_metrics['loss_detail'])
     
+    def set_config(self, config: Dict[str, Any]):
+        """设置训练配置
+        
+        Args:
+            config: 训练配置字典
+        """
+        self.config = config.copy()
+    
     def get_history(self) -> Dict[str, List]:
         """获取完整历史"""
         return self.history.copy()
     
-    def save(self, save_path: Path):
+    def save(self, save_path: Path, use_timestamp: bool = True):
         """保存历史到JSON文件
         
         Args:
-            save_path: 保存路径
+            save_path: 保存路径（如果use_timestamp=True，会被修改为带时间戳的路径）
+            use_timestamp: 是否使用时间戳文件名
         """
+        # 如果使用时间戳，修改保存路径
+        if use_timestamp:
+            # 创建 history 子目录
+            history_dir = save_path.parent / 'history'
+            history_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 生成带时间戳的文件名
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f'train_history_{timestamp}.json'
+            save_path = history_dir / filename
+        
+        # 构建完整的保存数据（配置在最前面）
+        save_data = {}
+        
+        # 1. 训练配置（放在最前面）
+        if self.config:
+            save_data['training_config'] = self.config
+        
+        # 2. 训练历史数据
+        save_data.update(self.history)
+        
+        # 保存到文件
         with open(save_path, 'w', encoding='utf-8') as f:
-            json.dump(self.history, f, indent=2, ensure_ascii=False)
+            json.dump(save_data, f, indent=2, ensure_ascii=False)
+        
+        return save_path
     
     def load(self, load_path: Path):
         """从JSON文件加载历史

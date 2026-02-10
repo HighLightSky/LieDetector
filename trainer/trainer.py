@@ -89,6 +89,32 @@ class FusionModelTrainer:
         trainable_params = [p for p in self.model.parameters() if p.requires_grad]
         print(f"可训练参数: {sum(p.numel() for p in trainable_params):,}")
         
+        # 记录训练配置到历史跟踪器
+        from datetime import datetime
+        training_config = {
+            'start_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'num_epochs': num_epochs,
+            'learning_rate': lr,
+            'weight_decay': weight_decay,
+            'patience': patience,
+            'optimizer': 'AdamW',
+            'scheduler': 'CosineAnnealingLR',
+            'loss_weights': self.loss_computer.get_weights(),
+            'ent_reg_weight': self.loss_computer.ent_reg_weight,
+            'w_mse_weight': self.loss_computer.w_mse_weight,
+            'batch_size': self.train_loader.batch_size,
+            'train_samples': len(self.train_loader.dataset),
+            'val_samples': len(self.val_loader.dataset),
+            'device': self.device,
+            'model_config': {
+                'visual_hidden': self.model.visual_hidden if hasattr(self.model, 'visual_hidden') else None,
+                'fusion_hidden': self.model.fusion_hidden if hasattr(self.model, 'fusion_hidden') else None,
+                'dropout': self.model.dropout if hasattr(self.model, 'dropout') else None,
+                'freeze_backbones': self.model.freeze_backbones if hasattr(self.model, 'freeze_backbones') else None,
+            }
+        }
+        self.history_tracker.set_config(training_config)
+        
         # 优化器
         optimizer = torch.optim.AdamW(
             trainable_params,
@@ -243,6 +269,6 @@ class FusionModelTrainer:
     def save_history(self):
         """保存训练历史（兼容旧接口）"""
         history_path = self.checkpoint_manager.get_save_dir() / 'training_history.json'
-        self.history_tracker.save(history_path)
-        print(f"[OK] 训练历史保存到: {history_path}")
+        actual_path = self.history_tracker.save(history_path, use_timestamp=True)
+        print(f"[OK] 训练历史保存到: {actual_path}")
 

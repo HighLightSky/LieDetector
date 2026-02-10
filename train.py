@@ -269,6 +269,7 @@ def main():
     print(f"  - Learning Rate: {args.lr}")
     print(f"  - Weight Decay: {args.weight_decay}")
     print(f"  - Patience: {args.patience}")
+    print(f"  - Dropout: {args.dropout}")
     print(f"  - Device: {args.device}")
     
     try:

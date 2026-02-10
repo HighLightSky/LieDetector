@@ -24,16 +24,46 @@ class ExperimentVisualizer:
         """
         self.history_path = history_path
         self.data = self._load_data()
+        self.config = self.data.get('training_config', {})  # 提取训练配置
         
     def _load_data(self) -> Dict:
         """加载训练历史数据"""
         with open(self.history_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
+            data = json.load(f)
+        
+        # 如果数据包含 training_config，说明是新格式
+        # 确保向后兼容旧格式
+        if 'training_config' in data:
+            # 新格式：training_config + 历史数据
+            return data
+        else:
+            # 旧格式：只有历史数据
+            return data
     
     def _ensure_output_dir(self, output_dir: str = "experiment_history/svg"):
         """确保输出目录存在"""
         os.makedirs(output_dir, exist_ok=True)
         return output_dir
+    
+    def print_config(self):
+        """打印训练配置信息"""
+        if not self.config:
+            print("没有找到训练配置信息（可能是旧格式的历史文件）")
+            return
+        
+        print("\n" + "="*60)
+        print("训练配置信息")
+        print("="*60)
+        
+        for key, value in self.config.items():
+            if isinstance(value, dict):
+                print(f"\n{key}:")
+                for sub_key, sub_value in value.items():
+                    print(f"  {sub_key}: {sub_value}")
+            else:
+                print(f"{key}: {value}")
+        
+        print("="*60 + "\n")
     
     def _generate_filename(self, prefix: str, output_dir: str) -> str:
         """生成带时间戳的文件名"""
@@ -206,9 +236,16 @@ class ExperimentVisualizer:
         axes[0, 1].grid(True, alpha=0.3)
         
         # 子图3: 训练模态损失
-        for modality in ['face', 'openface', 'audio', 'task']:
-            values = [epoch_data[modality] for epoch_data in self.data['train_loss_detail']]
-            axes[1, 0].plot(epochs, values, label=modality, linewidth=2)
+        # 动态获取可用的模态
+        if 'train_loss_detail' in self.data and len(self.data['train_loss_detail']) > 0:
+            available_modalities = [k for k in self.data['train_loss_detail'][0].keys() 
+                                   if k not in ['ent_reg_weight', 'w_mse_weight', 'entropy_reg', 'weight_mse']]
+            for modality in available_modalities:
+                try:
+                    values = [epoch_data[modality] for epoch_data in self.data['train_loss_detail']]
+                    axes[1, 0].plot(epochs, values, label=modality, linewidth=2)
+                except KeyError:
+                    continue
         axes[1, 0].set_xlabel('Epoch')
         axes[1, 0].set_ylabel('Loss')
         axes[1, 0].set_title('Train Modality Losses')
@@ -216,9 +253,15 @@ class ExperimentVisualizer:
         axes[1, 0].grid(True, alpha=0.3)
         
         # 子图4: 验证模态损失
-        for modality in ['face', 'openface', 'audio', 'task']:
-            values = [epoch_data[modality] for epoch_data in self.data['val_loss_detail']]
-            axes[1, 1].plot(epochs, values, label=modality, linewidth=2)
+        if 'val_loss_detail' in self.data and len(self.data['val_loss_detail']) > 0:
+            available_modalities = [k for k in self.data['val_loss_detail'][0].keys() 
+                                   if k not in ['ent_reg_weight', 'w_mse_weight', 'entropy_reg', 'weight_mse']]
+            for modality in available_modalities:
+                try:
+                    values = [epoch_data[modality] for epoch_data in self.data['val_loss_detail']]
+                    axes[1, 1].plot(epochs, values, label=modality, linewidth=2)
+                except KeyError:
+                    continue
         axes[1, 1].set_xlabel('Epoch')
         axes[1, 1].set_ylabel('Loss')
         axes[1, 1].set_title('Val Modality Losses')
