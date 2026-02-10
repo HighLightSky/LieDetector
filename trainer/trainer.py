@@ -109,6 +109,19 @@ class FusionModelTrainer:
         print(f"\n开始训练 {num_epochs} 个 epoch...")
         start_time = time.time()
         
+        # Epoch 0: 基线评估（训练前）
+        print(f"\nEpoch 0/{num_epochs} - 基线评估")
+        print("-" * 60)
+        baseline_metrics = self.validation_loop.run_validation(
+            self.val_loader,
+            verbose=verbose
+        )
+        print(f"基线 - Loss: {baseline_metrics['loss']:.4f}, Acc: {baseline_metrics['accuracy']:.2f}%")
+        if verbose and baseline_metrics['loss_detail']:
+            print("  详细损失:")
+            for key, val in baseline_metrics['loss_detail'].items():
+                print(f"    {key}: {val:.4f}")
+        
         no_improve_count = 0
         
         for epoch in range(num_epochs):

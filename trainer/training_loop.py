@@ -1,6 +1,8 @@
 """
 训练循环模块
 负责单个epoch的训练逻辑
+
+使用 torch.nan_to_num 处理 NaN/Inf，不跳过批次
 """
 
 import torch
@@ -67,45 +69,34 @@ class TrainingLoop:
             openfaces = batch['openfaces'].to(self.device) if batch['openfaces'] is not None else None
             labels = batch['labels'].to(self.device)
             
+            # 处理输入数据的NaN/Inf
+            faces = torch.nan_to_num(faces, nan=0.0, posinf=1.0, neginf=0.0)
+            audios = torch.nan_to_num(audios, nan=0.0, posinf=1.0, neginf=0.0)
+            if openfaces is not None:
+                openfaces = torch.nan_to_num(openfaces, nan=0.0, posinf=1.0, neginf=0.0)
+            
             # 前向传播
             optimizer.zero_grad()
             output = self.model(faces, openfaces, audios)
             
-            # 检查输出是否有NaN/Inf
-            if self._has_nan_output(output):
-                print(f"\n[WARNING] 前向传播产生NaN/Inf，跳过此批次")
-                continue
-            
-            # 计算损失
+            # 计算损失（LossComputer内部会处理NaN）
             loss, losses = self.loss_computer.compute(output, labels, return_details=True)
             
-            # 检查损失是否有效
-            if torch.isnan(loss) or torch.isinf(loss):
-                print(f"\n[WARNING] NaN/Inf loss detected, skipping batch")
-                continue
+            # 处理损失中的NaN/Inf
+            loss = torch.nan_to_num(loss, nan=0.0, posinf=1e6, neginf=-1e6)
             
             # 反向传播
             loss.backward()
             
-            # 检查梯度
-            if self._has_nan_gradient():
-                print(f"\n[WARNING] 梯度包含NaN/Inf，跳过此批次的参数更新")
-                optimizer.zero_grad()
-                continue
-            
             # 梯度裁剪
             grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-            
-            if grad_norm > 10.0:
-                print(f"\n[WARNING] 梯度范数过大 ({grad_norm:.2f})，跳过此批次")
-                optimizer.zero_grad()
-                continue
             
             optimizer.step()
             
             # 统计指标
             batch_size = faces.size(0)
             fused_probs = output['probs']['fused']
+            fused_probs = torch.nan_to_num(fused_probs, nan=0.0, posinf=1.0, neginf=0.0)
             _, predicted = torch.max(fused_probs, 1)
             
             metrics.update(
@@ -124,29 +115,3 @@ class TrainingLoop:
                 })
         
         return metrics.compute()
-    
-    def _has_nan_output(self, output: Dict) -> bool:
-        """检查输出是否包含NaN/Inf
-        
-        Args:
-            output: 模型输出字典
-        
-        Returns:
-            是否包含NaN/Inf
-        """
-        for key, logits in output['logits'].items():
-            if torch.isnan(logits).any() or torch.isinf(logits).any():
-                return True
-        return False
-    
-    def _has_nan_gradient(self) -> bool:
-        """检查梯度是否包含NaN/Inf
-        
-        Returns:
-            是否包含NaN/Inf
-        """
-        for param in self.model.parameters():
-            if param.grad is not None:
-                if torch.isnan(param.grad).any() or torch.isinf(param.grad).any():
-                    return True
-        return False

@@ -73,13 +73,18 @@ def parse_args():
 
 
 def set_seed(seed):
-    """设置随机种子"""
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    """设置随机种子（更严格的控制）"""
+    import os
     import numpy as np
     import random
-    np.random.seed(seed)
+    
+    os.environ["PYTHONHASHSEED"] = str(seed)
     random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 
 def main():

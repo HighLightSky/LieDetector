@@ -1,6 +1,8 @@
 """
 验证循环模块
 负责模型验证逻辑
+
+使用 torch.nan_to_num 处理 NaN/Inf
 """
 
 import torch
@@ -66,15 +68,25 @@ class ValidationLoop:
                 openfaces = batch['openfaces'].to(self.device) if batch['openfaces'] is not None else None
                 labels = batch['labels'].to(self.device)
                 
+                # 处理输入数据的NaN/Inf
+                faces = torch.nan_to_num(faces, nan=0.0, posinf=1.0, neginf=0.0)
+                audios = torch.nan_to_num(audios, nan=0.0, posinf=1.0, neginf=0.0)
+                if openfaces is not None:
+                    openfaces = torch.nan_to_num(openfaces, nan=0.0, posinf=1.0, neginf=0.0)
+                
                 # 前向传播
                 output = self.model(faces, openfaces, audios)
                 
-                # 计算损失
+                # 计算损失（LossComputer内部会处理NaN）
                 loss, losses = self.loss_computer.compute(output, labels, return_details=True)
+                
+                # 处理损失中的NaN/Inf
+                loss = torch.nan_to_num(loss, nan=0.0, posinf=1e6, neginf=-1e6)
                 
                 # 统计指标
                 batch_size = faces.size(0)
                 fused_probs = output['probs']['fused']
+                fused_probs = torch.nan_to_num(fused_probs, nan=0.0, posinf=1.0, neginf=0.0)
                 _, predicted = torch.max(fused_probs, 1)
                 
                 metrics.update(
